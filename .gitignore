@@ -1,0 +1,12 @@
+# Local workspace copies (canonical tree is superposition-law-agop/)
+/Makefile
+/README.md
+/requirements.txt
+/run_experiment.py
+/data/
+/results/
+/experiments/
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+.DS_Store
