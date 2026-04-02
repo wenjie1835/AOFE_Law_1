@@ -183,7 +183,7 @@ class AssociativeRecallDataset(torch.utils.data.Dataset):
     so the model must learn the general rule v=k+8 from diverse key permutations.
     """
     NUM_KV     = 8   # number of key-value pairs per sequence
-    VOCAB_SIZE = 32  # keys 0..7, values 8..15; tokens 16..31 unused
+    VOCAB_SIZE = 16  # keys 0..7, values 8..15
 
     def __init__(self, *, size: int, seed: int):
         super().__init__()
@@ -218,6 +218,22 @@ class AssociativeRecallDataset(torch.utils.data.Dataset):
         seq = torch.cat([kv, qa, q_extra], dim=0)                 # [33]
 
         return seq[:-1].clone(), seq[1:].clone()                   # [32], [32]
+
+
+def answer_positions(seq_len: int) -> torch.Tensor:
+    # Targets y correspond to seq[1:], so answer tokens land at indices 16,18,...,30.
+    return torch.arange(16, seq_len, 2, dtype=torch.long)
+
+
+def masked_answer_nll(logits: torch.Tensor, targets: torch.Tensor, answer_pos: torch.Tensor, reduction: str) -> torch.Tensor:
+    pos = answer_pos.to(logits.device)
+    logits_sel = logits.index_select(dim=1, index=pos)
+    targets_sel = targets.index_select(dim=1, index=pos)
+    return F.cross_entropy(
+        logits_sel.reshape(-1, logits_sel.size(-1)),
+        targets_sel.reshape(-1),
+        reduction=reduction,
+    )
 
 
 # -----------------------
@@ -411,15 +427,19 @@ class TrainCfg:
     grad_clip: float = 1.0
     eval_every: int = 1000
 
-    vocab_size: int = 32   # keys 0-7, values 8-15, tokens 16-31 unused
+    vocab_size: int = 16   # keys 0-7, values 8-15
     seq_len: int = 32      # input/target length (AssociativeRecall: 33-token seq → x/y of 32)
     train_size: int = 0
+    val_size: int = 5000
     test_size: int = 5000
 
     target_params: int = 1_000_000
     depth_list: List[int] = None
-    head_dim: int = 16
+    head_dim: int = 8
     dropout: float = 0.0
+    max_padding_ratio: float = 0.15
+    max_train_factor: float = 3.0
+    fit_patience: int = 8
 
     agop_batch: int = 256
     agop_proj_samples: int = 64   # 64 proj × 256 batch = 16384 rank-1 for 32×32 AGOP → 31×
@@ -440,9 +460,10 @@ def evaluate_lm(
     model: TinyGPT,
     loader: torch.utils.data.DataLoader,
     device: torch.device,
+    answer_pos: torch.Tensor,
     max_batches: Optional[int] = None,
 ) -> float:
-    """Returns average NLL (cross-entropy) per token."""
+    """Returns average NLL on answer positions only."""
     model.eval()
     total_loss   = 0.0
     total_tokens = 0
@@ -452,22 +473,23 @@ def evaluate_lm(
         x = x.to(device)
         y = y.to(device)
         logits = model(x)
-        loss   = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1), reduction="sum")
+        loss   = masked_answer_nll(logits, y, answer_pos, reduction="sum")
         total_loss   += float(loss.item())
-        total_tokens += int(y.numel())
+        total_tokens += int(y.shape[0] * answer_pos.numel())
     return total_loss / max(1, total_tokens)
 
 
 def train_one_model(
     model: TinyGPT,
     train_loader: torch.utils.data.DataLoader,
+    val_loader: torch.utils.data.DataLoader,
     test_loader: torch.utils.data.DataLoader,
     cfg: TrainCfg,
     device: torch.device,
 ) -> Tuple[Dict[str, float], List[Dict[str, float]]]:
     """
-    Train for exactly cfg.steps steps (strict D=20N budget).
-    No early stopping, no checkpoint restoration — the final model state is reported.
+    Train until answer-only validation NLL plateaus after the D≈20N budget is reached.
+    Report the best validation-state checkpoint to stay in a fitted regime.
     """
     model.to(device)
     model.train()
@@ -477,7 +499,12 @@ def train_one_model(
 
     t0        = time.time()
     history: List[Dict[str, float]] = []
-    max_steps = int(cfg.steps)  # strict D=20N budget — no extension
+    min_steps = int(cfg.steps)
+    max_steps = max(min_steps, int(math.ceil(cfg.max_train_factor * cfg.steps)))
+    ans_pos = answer_positions(cfg.seq_len)
+    best_val = float("inf")
+    best_state = None
+    stale_evals = 0
 
     for step in range(max_steps):
         try:
@@ -494,7 +521,7 @@ def train_one_model(
             pg["lr"] = lr
 
         logits = model(x)
-        loss   = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1), reduction="mean")
+        loss   = masked_answer_nll(logits, y, ans_pos, reduction="mean")
 
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -503,25 +530,38 @@ def train_one_model(
         opt.step()
 
         if (step + 1) % int(cfg.eval_every) == 0 or (step + 1) == max_steps:
-            train_nll = evaluate_lm(model, train_loader, device, max_batches=50)
-            test_nll  = evaluate_lm(model, test_loader,  device, max_batches=None)
+            train_nll = evaluate_lm(model, train_loader, device, ans_pos, max_batches=50)
+            val_nll   = evaluate_lm(model, val_loader,   device, ans_pos, max_batches=None)
+            test_nll  = evaluate_lm(model, test_loader,  device, ans_pos, max_batches=None)
             history.append({
                 "step":      int(step + 1),
                 "lr":        float(lr),
                 "train_nll": float(train_nll),
+                "val_nll":   float(val_nll),
                 "test_nll":  float(test_nll),
             })
             dt  = time.time() - t0
             gap = test_nll - train_nll
             print(
                 f"step {step+1:6d}/{max_steps}  lr={lr:.3e}  "
-                f"train_nll={train_nll:.4f}  test_nll={test_nll:.4f}  "
+                f"train_nll={train_nll:.4f}  val_nll={val_nll:.4f}  test_nll={test_nll:.4f}  "
                 f"ppl={math.exp(test_nll):.2f}  gap={gap:+.4f}  time={dt:.1f}s"
             )
+            if val_nll + 1e-6 < best_val:
+                best_val = float(val_nll)
+                stale_evals = 0
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            else:
+                stale_evals += 1
+            if (step + 1) >= min_steps and stale_evals >= int(cfg.fit_patience):
+                break
 
-    # Final evaluation at end of strict D=20N budget
-    train_nll = evaluate_lm(model, train_loader, device, max_batches=None)
-    test_nll  = evaluate_lm(model, test_loader,  device, max_batches=None)
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    train_nll = evaluate_lm(model, train_loader, device, ans_pos, max_batches=None)
+    val_nll   = evaluate_lm(model, val_loader,   device, ans_pos, max_batches=None)
+    test_nll  = evaluate_lm(model, test_loader,  device, ans_pos, max_batches=None)
 
     gap = test_nll - train_nll
     if gap > 1.0:
@@ -529,6 +569,7 @@ def train_one_model(
 
     return {
         "train_nll": float(train_nll),
+        "val_nll":   float(val_nll),
         "test_nll":  float(test_nll),
         "test_ppl":  float(math.exp(test_nll)),
         "steps_run": int(history[-1]["step"]) if history else 0,
@@ -652,9 +693,11 @@ def save_curve(history: List[Dict[str, float]], out_dir: str, stem: str) -> None
 
     steps      = [row["step"]      for row in history]
     train_vals = [row["train_nll"] for row in history]
+    val_vals   = [row["val_nll"]   for row in history]
     test_vals  = [row["test_nll"]  for row in history]
     plt.figure(figsize=(6, 4))
     plt.plot(steps, train_vals, label="train_nll")
+    plt.plot(steps, val_vals,   label="val_nll")
     plt.plot(steps, test_vals,  label="test_nll")
     plt.xlabel("step")
     plt.ylabel("NLL (nats/token)")
@@ -677,13 +720,14 @@ def main():
 
     parser.add_argument("--target_params", type=int, default=1_000_000)
     parser.add_argument("--depth_list",    type=str, default="3,4,5,6,7,8,9,10,11,12")
-    parser.add_argument("--head_dim",      type=int, default=16)
+    parser.add_argument("--head_dim",      type=int, default=8)
     parser.add_argument("--dropout",       type=float, default=0.0)
 
-    parser.add_argument("--vocab_size",   type=int, default=32,
-                        help="Vocabulary size (AssociativeRecall uses only 0-15).")
+    parser.add_argument("--vocab_size",   type=int, default=16,
+                        help="Vocabulary size for associative recall.")
     parser.add_argument("--seq_len",      type=int, default=32)
     parser.add_argument("--train_size",   type=int, default=0)
+    parser.add_argument("--val_size",     type=int, default=5000)
     parser.add_argument("--test_size",    type=int, default=5000)
 
     parser.add_argument("--batch_size",   type=int,   default=128)
@@ -699,6 +743,9 @@ def main():
     parser.add_argument("--agop_batch",        type=int, default=256)
     parser.add_argument("--agop_proj_samples", type=int, default=64)
     parser.add_argument("--max_agop_dim",      type=int, default=2048)
+    parser.add_argument("--max_padding_ratio", type=float, default=0.15)
+    parser.add_argument("--max_train_factor",  type=float, default=3.0)
+    parser.add_argument("--fit_patience",      type=int,   default=8)
 
     args = parser.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -711,11 +758,12 @@ def main():
         raise ValueError(f"depth_list must contain exactly 10 shapes, got {len(depths)}.")
 
     # Auto train_size and steps from D=data_ratio×N
+    supervised_tokens_per_sample = int(answer_positions(args.seq_len).numel())
     if args.train_size <= 0:
-        args.train_size = int(math.ceil(args.data_ratio * args.target_params / float(args.seq_len)))
+        args.train_size = int(math.ceil(args.data_ratio * args.target_params / float(supervised_tokens_per_sample)))
     if args.steps <= 0:
         args.steps = int(math.ceil(
-            args.data_ratio * args.target_params / float(args.batch_size * args.seq_len)
+            args.data_ratio * args.target_params / float(args.batch_size * supervised_tokens_per_sample)
         ))
 
     cfg = TrainCfg(
@@ -723,10 +771,14 @@ def main():
         data_ratio=args.data_ratio, warmup_steps=args.warmup_steps,
         batch_size=args.batch_size, eval_every=args.eval_every, grad_clip=args.grad_clip,
         vocab_size=args.vocab_size, seq_len=args.seq_len, train_size=args.train_size,
+        val_size=args.val_size,
         test_size=args.test_size,
         target_params=args.target_params, depth_list=depths, head_dim=args.head_dim,
         dropout=args.dropout, agop_batch=args.agop_batch,
         agop_proj_samples=args.agop_proj_samples, max_agop_dim=args.max_agop_dim,
+        max_padding_ratio=args.max_padding_ratio,
+        max_train_factor=args.max_train_factor,
+        fit_patience=args.fit_patience,
         seed=args.seed,
     )
 
@@ -737,8 +789,8 @@ def main():
             f"AGOP dim V={agop_out_dim} > max_agop_dim={cfg.max_agop_dim}."
         )
 
-    total_train_tokens = cfg.steps * cfg.batch_size * cfg.seq_len
-    unique_tokens      = cfg.train_size * cfg.seq_len
+    total_train_tokens = cfg.steps * cfg.batch_size * supervised_tokens_per_sample
+    unique_tokens      = cfg.train_size * supervised_tokens_per_sample
     approx_epochs      = cfg.steps * cfg.batch_size / cfg.train_size
 
     print("========== Budget (Transformer / AssociativeRecall) ==========")
@@ -749,6 +801,7 @@ def main():
           f"(→ {cfg.agop_proj_samples * cfg.agop_batch} rank-1 updates for "
           f"{agop_out_dim*(agop_out_dim+1)//2} entries)")
     print(f"train_size          = {cfg.train_size:,}  unique random sequences")
+    print(f"supervised positions= {supervised_tokens_per_sample} answer tokens / sequence")
     print(f"approx epochs       = {approx_epochs:.2f}  (≈ 1 pass per unique sample)")
     print(f"base steps          = {cfg.steps:,}")
     print(f"D (total tokens)    = {total_train_tokens:,}   D/N = {total_train_tokens/cfg.target_params:.1f}×")
@@ -756,10 +809,13 @@ def main():
     print("==============================================================")
 
     train_ds = AssociativeRecallDataset(size=cfg.train_size, seed=cfg.seed + 1)
-    test_ds  = AssociativeRecallDataset(size=cfg.test_size,  seed=cfg.seed + 2)
+    val_ds   = AssociativeRecallDataset(size=cfg.val_size,   seed=cfg.seed + 2)
+    test_ds  = AssociativeRecallDataset(size=cfg.test_size,  seed=cfg.seed + 3)
 
     train_loader = torch.utils.data.DataLoader(
         train_ds, batch_size=cfg.batch_size, shuffle=True, drop_last=True)
+    val_loader   = torch.utils.data.DataLoader(
+        val_ds,   batch_size=cfg.batch_size, shuffle=False, drop_last=False)
     test_loader  = torch.utils.data.DataLoader(
         test_ds,  batch_size=cfg.batch_size, shuffle=False, drop_last=False)
 
@@ -780,13 +836,17 @@ def main():
             depth=depth, d_model=d_model, n_heads=n_heads, d_ff=d_ff, cfg=cfg)
         total = count_params(model)
         pad   = total - active
+        pad_ratio = pad / max(1, total)
+        if pad_ratio > cfg.max_padding_ratio:
+            print(f"  [SKIP] depth={depth}: padding_ratio={pad_ratio:.3f} exceeds max_padding_ratio={cfg.max_padding_ratio:.3f}")
+            continue
 
         print("\n" + "=" * 80)
         print(f"[Transformer] depth={depth:3d}  d_model={d_model:4d}  n_heads={n_heads:3d}  "
               f"d_ff={d_ff:5d}  active={active:,}  pad={pad:,}  total={total:,}")
         print("=" * 80)
 
-        metrics, history = train_one_model(model, train_loader, test_loader, cfg, device)
+        metrics, history = train_one_model(model, train_loader, val_loader, test_loader, cfg, device)
         save_curve(history, curve_dir, f"transformer_depth{depth}_dmodel{d_model}")
 
         agop = estimate_agop_wrt_embeddings(
@@ -802,7 +862,7 @@ def main():
             "active_params":       int(active),
             "pad_params":          int(pad),
             "total_params":        int(total),
-            "padding_ratio":       float(pad / max(1, total)),
+            "padding_ratio":       float(pad_ratio),
             "agop_dim":            int(agop.shape[0]),
             "agop_offdiag_energy": float(off_e),
             "agop_offdiag_ratio":  float(off_r),

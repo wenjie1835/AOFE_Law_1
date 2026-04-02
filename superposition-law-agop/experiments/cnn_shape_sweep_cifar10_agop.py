@@ -406,10 +406,11 @@ def make_cifar10_loaders(
     *,
     data_dir: str,
     train_size: int,
+    val_size: int,
     batch_size: int,
     seed: int,
     num_workers: int = 2,
-) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
+) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     # augment=True for training to prevent overfitting at ~31 epochs
     train_set = CIFAR10Dataset(root=data_dir, train=True, augment=True)
     test_set  = CIFAR10Dataset(root=data_dir, train=False, augment=False)
@@ -417,8 +418,14 @@ def make_cifar10_loaders(
     g = torch.Generator()
     g.manual_seed(seed)
     perm = torch.randperm(len(train_set), generator=g).tolist()
-    idx = perm[:int(train_size)]
-    train_subset = torch.utils.data.Subset(train_set, idx)
+    total_needed = int(train_size) + int(val_size)
+    if total_needed >= len(train_set):
+        raise ValueError(f"train_size + val_size must be < {len(train_set)} for CIFAR-10.")
+    train_idx = perm[:int(train_size)]
+    val_idx = perm[int(train_size):total_needed]
+    train_subset = torch.utils.data.Subset(train_set, train_idx)
+    val_base = CIFAR10Dataset(root=data_dir, train=True, augment=False)
+    val_subset = torch.utils.data.Subset(val_base, val_idx)
 
     train_loader = torch.utils.data.DataLoader(
         train_subset,
@@ -436,7 +443,15 @@ def make_cifar10_loaders(
         num_workers=num_workers,
         pin_memory=True,
     )
-    return train_loader, test_loader
+    val_loader = torch.utils.data.DataLoader(
+        val_subset,
+        batch_size=batch_size,
+        shuffle=False,
+        drop_last=False,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+    return train_loader, val_loader, test_loader
 
 
 # -----------------------
@@ -459,9 +474,13 @@ class TrainCfg:
     max_agop_dim: int = 8192
 
     train_size: int = 40000
+    val_size: int = 5000
     target_params: int = 1_000_000
     patch: int = 8
     dropout: float = 0.0
+    max_padding_ratio: float = 0.18
+    max_train_factor: float = 3.0
+    fit_patience: int = 8
 
     depth_list: List[int] = None
     seed: int = 0
@@ -502,14 +521,14 @@ def evaluate_classifier(
 def train_one_model(
     model: nn.Module,
     train_loader: torch.utils.data.DataLoader,
+    val_loader: torch.utils.data.DataLoader,
     test_loader: torch.utils.data.DataLoader,
     cfg: TrainCfg,
     device: torch.device,
 ) -> Tuple[Dict[str, float], List[Dict[str, float]]]:
     """
-    Train for exactly cfg.steps steps (strict D=20N budget).
-    No early stopping, no checkpoint restoration — the final model state is reported.
-    This matches the Chinchilla compute-optimal evaluation protocol.
+    Train until the validation loss plateaus after the D≈20N budget is reached.
+    Report the best validation-state checkpoint to stay in a fitted regime.
     """
     model.to(device)
     model.train()
@@ -519,7 +538,11 @@ def train_one_model(
     train_iter = iter(train_loader)
     t0 = time.time()
     history: List[Dict[str, float]] = []
-    max_steps = int(cfg.steps)  # strict D=20N budget — no extension
+    min_steps = int(cfg.steps)
+    max_steps = max(min_steps, int(math.ceil(cfg.max_train_factor * cfg.steps)))
+    best_val = float("inf")
+    best_state = None
+    stale_evals = 0
 
     for step in range(max_steps):
         try:
@@ -546,12 +569,15 @@ def train_one_model(
 
         if (step + 1) % int(cfg.eval_every) == 0 or (step + 1) == max_steps:
             train_loss, train_acc = evaluate_classifier(model, train_loader, device, max_batches=50)
+            val_loss, val_acc     = evaluate_classifier(model, val_loader,   device, max_batches=None)
             test_loss, test_acc   = evaluate_classifier(model, test_loader,  device, max_batches=None)
             history.append({
                 "step": int(step + 1),
                 "lr": float(lr),
                 "train_loss": float(train_loss),
                 "train_acc":  float(train_acc),
+                "val_loss":   float(val_loss),
+                "val_acc":    float(val_acc),
                 "test_loss":  float(test_loss),
                 "test_acc":   float(test_acc),
             })
@@ -559,17 +585,31 @@ def train_one_model(
             print(
                 f"step {step+1:6d}/{max_steps}  lr={lr:.3e}  "
                 f"train_loss={train_loss:.4f}  train_acc={train_acc*100:5.1f}%  "
+                f"val_loss={val_loss:.4f}  val_acc={val_acc*100:5.1f}%  "
                 f"test_loss={test_loss:.4f}  test_acc={test_acc*100:5.1f}%  "
                 f"gap={test_loss - train_loss:+.4f}  time={dt:.1f}s"
             )
+            if val_loss + 1e-6 < best_val:
+                best_val = float(val_loss)
+                stale_evals = 0
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            else:
+                stale_evals += 1
+            if (step + 1) >= min_steps and stale_evals >= int(cfg.fit_patience):
+                break
 
-    # Final evaluation at end of strict D=20N budget
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
     train_loss, train_acc = evaluate_classifier(model, train_loader, device, max_batches=None)
+    val_loss, val_acc     = evaluate_classifier(model, val_loader,   device, max_batches=None)
     test_loss,  test_acc  = evaluate_classifier(model, test_loader,  device, max_batches=None)
 
     return {
         "train_loss": float(train_loss),
         "train_acc":  float(train_acc),
+        "val_loss":   float(val_loss),
+        "val_acc":    float(val_acc),
         "test_loss":  float(test_loss),
         "test_acc":   float(test_acc),
         "steps_run":  int(history[-1]["step"]) if history else 0,
@@ -679,9 +719,11 @@ def save_curve(history: List[Dict[str, float]], out_dir: str, stem: str) -> None
 
     steps = [row["step"] for row in history]
     train_vals = [row["train_loss"] for row in history]
+    val_vals   = [row["val_loss"]   for row in history]
     test_vals  = [row["test_loss"]  for row in history]
     plt.figure(figsize=(6, 4))
     plt.plot(steps, train_vals, label="train_loss")
+    plt.plot(steps, val_vals,   label="val_loss")
     plt.plot(steps, test_vals,  label="test_loss")
     plt.xlabel("step")
     plt.ylabel("Cross-Entropy Loss")
@@ -710,6 +752,7 @@ def main():
     parser.add_argument("--dropout",       type=float, default=0.0)
 
     parser.add_argument("--train_size",   type=int,   default=40000)
+    parser.add_argument("--val_size",     type=int,   default=5000)
     parser.add_argument("--batch_size",   type=int,   default=128)
     parser.add_argument("--steps",        type=int,   default=0,
                         help="Base training steps. 0 = auto-compute from D=data_ratio×N.")
@@ -723,6 +766,9 @@ def main():
     parser.add_argument("--agop_batch",        type=int, default=256)
     parser.add_argument("--agop_proj_samples", type=int, default=16)
     parser.add_argument("--max_agop_dim",      type=int, default=8192)
+    parser.add_argument("--max_padding_ratio", type=float, default=0.18)
+    parser.add_argument("--max_train_factor",  type=float, default=3.0)
+    parser.add_argument("--fit_patience",      type=int,   default=8)
 
     args = parser.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -768,18 +814,23 @@ def main():
         agop_proj_samples=args.agop_proj_samples,
         max_agop_dim=args.max_agop_dim,
         train_size=args.train_size,
+        val_size=args.val_size,
         target_params=args.target_params,
         patch=args.patch,
         dropout=args.dropout,
+        max_padding_ratio=args.max_padding_ratio,
+        max_train_factor=args.max_train_factor,
+        fit_patience=args.fit_patience,
         depth_list=depths,
         seed=args.seed,
         num_workers=args.num_workers,
     )
     curve_dir = os.path.join(args.out_dir, "curves")
 
-    train_loader, test_loader = make_cifar10_loaders(
+    train_loader, val_loader, test_loader = make_cifar10_loaders(
         data_dir=args.data_dir,
         train_size=cfg.train_size,
+        val_size=cfg.val_size,
         batch_size=cfg.batch_size,
         seed=cfg.seed,
         num_workers=cfg.num_workers,
@@ -801,12 +852,16 @@ def main():
         )
         total = count_params(model)
         pad   = total - active
+        pad_ratio = pad / max(1, total)
+        if pad_ratio > cfg.max_padding_ratio:
+            print(f"  [SKIP] depth={depth}: padding_ratio={pad_ratio:.3f} exceeds max_padding_ratio={cfg.max_padding_ratio:.3f}")
+            continue
 
         print("\n" + "=" * 80)
         print(f"[CNN] depth={depth:3d}  channels={channels:4d}  active={active:,}  pad={pad:,}  total={total:,}")
         print("=" * 80)
 
-        metrics, history = train_one_model(model, train_loader, test_loader, cfg, device)
+        metrics, history = train_one_model(model, train_loader, val_loader, test_loader, cfg, device)
         save_curve(history, curve_dir, f"cnn_depth{depth}_channels{channels}")
 
         agop = estimate_agop_wrt_embedding(

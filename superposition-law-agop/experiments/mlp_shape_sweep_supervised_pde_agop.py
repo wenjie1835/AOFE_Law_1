@@ -349,6 +349,7 @@ class TrainCfg:
     out_dim: int = 32
     teacher_hidden: int = 128
     train_size: int = 0
+    val_size: int = 2000
     test_size: int = 2000
 
     target_params: int = 1_000_000
@@ -358,6 +359,9 @@ class TrainCfg:
     max_width: int = 2048
     activation: str = "gelu"
     dropout: float = 0.0
+    max_padding_ratio: float = 0.15
+    max_train_factor: float = 3.0
+    fit_patience: int = 8
 
     agop_batch: int = 256
     agop_proj_samples: int = 32
@@ -397,13 +401,14 @@ def evaluate_mse(
 def train_one_model(
     model: TinyMLP,
     train_loader: torch.utils.data.DataLoader,
+    val_loader: torch.utils.data.DataLoader,
     test_loader: torch.utils.data.DataLoader,
     cfg: TrainCfg,
     device: torch.device,
 ) -> Tuple[Dict[str, float], List[Dict[str, float]]]:
     """
-    Train for exactly cfg.steps steps (strict D=20N budget).
-    No early stopping, no checkpoint restoration — the final model state is reported.
+    Train until validation MSE plateaus after the D≈20N budget is reached.
+    Report the best validation-state checkpoint to stay near the fitted regime.
     """
     model.to(device)
     model.train()
@@ -413,7 +418,11 @@ def train_one_model(
 
     t0       = time.time()
     history: List[Dict[str, float]] = []
-    max_steps = int(cfg.steps)  # strict D=20N budget — no extension
+    min_steps = int(cfg.steps)
+    max_steps = max(min_steps, int(math.ceil(cfg.max_train_factor * cfg.steps)))
+    best_val = float("inf")
+    best_state = None
+    stale_evals = 0
 
     for step in range(max_steps):
         try:
@@ -440,23 +449,36 @@ def train_one_model(
 
         if (step + 1) % int(cfg.eval_every) == 0 or (step + 1) == max_steps:
             train_mse = evaluate_mse(model, train_loader, device, max_batches=50)
+            val_mse   = evaluate_mse(model, val_loader,   device, max_batches=None)
             test_mse  = evaluate_mse(model, test_loader,  device, max_batches=None)
             history.append({
                 "step":      int(step + 1),
                 "lr":        float(lr),
                 "train_mse": float(train_mse),
+                "val_mse":   float(val_mse),
                 "test_mse":  float(test_mse),
             })
             dt = time.time() - t0
             gap = test_mse - train_mse
             print(
                 f"step {step+1:6d}/{max_steps}  lr={lr:.3e}  "
-                f"train_mse={train_mse:.6e}  test_mse={test_mse:.6e}  "
+                f"train_mse={train_mse:.6e}  val_mse={val_mse:.6e}  test_mse={test_mse:.6e}  "
                 f"gap={gap:+.3e}  time={dt:.1f}s"
             )
+            if val_mse + 1e-12 < best_val:
+                best_val = float(val_mse)
+                stale_evals = 0
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            else:
+                stale_evals += 1
+            if (step + 1) >= min_steps and stale_evals >= int(cfg.fit_patience):
+                break
 
-    # Final evaluation at end of strict D=20N budget
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
     train_mse = evaluate_mse(model, train_loader, device, max_batches=None)
+    val_mse   = evaluate_mse(model, val_loader,   device, max_batches=None)
     test_mse  = evaluate_mse(model, test_loader,  device, max_batches=None)
 
     gap = test_mse - train_mse
@@ -465,6 +487,7 @@ def train_one_model(
 
     return {
         "train_mse": float(train_mse),
+        "val_mse":   float(val_mse),
         "test_mse":  float(test_mse),
         "steps_run": int(history[-1]["step"]) if history else 0,
     }, history
@@ -559,9 +582,11 @@ def save_curve(history: List[Dict[str, float]], out_dir: str, stem: str) -> None
 
     steps      = [row["step"]      for row in history]
     train_vals = [row["train_mse"] for row in history]
+    val_vals   = [row["val_mse"]   for row in history]
     test_vals  = [row["test_mse"]  for row in history]
     plt.figure(figsize=(6, 4))
     plt.plot(steps, train_vals, label="train_mse")
+    plt.plot(steps, val_vals,   label="val_mse")
     plt.plot(steps, test_vals,  label="test_mse")
     plt.yscale("log")   # log scale for appendix readability (not used in correlation)
     plt.xlabel("step")
@@ -615,6 +640,7 @@ def main() -> None:
                    help="Hidden size of the random teacher MLP.")
     p.add_argument("--train_size",     type=int, default=0,
                    help="0 = auto-match unique_targets ≈ data_ratio×N.")
+    p.add_argument("--val_size",       type=int, default=2000)
     p.add_argument("--test_size",      type=int, default=2000)
 
     p.add_argument("--lr",           type=float, default=1e-3)
@@ -634,6 +660,9 @@ def main() -> None:
 
     p.add_argument("--agop_batch",        type=int, default=256)
     p.add_argument("--agop_proj_samples", type=int, default=32)
+    p.add_argument("--max_padding_ratio", type=float, default=0.15)
+    p.add_argument("--max_train_factor",  type=float, default=3.0)
+    p.add_argument("--fit_patience",      type=int,   default=8)
 
     p.add_argument("--seed", type=int, default=0)
 
@@ -650,6 +679,7 @@ def main() -> None:
     cfg.out_dim        = int(args.out_dim)
     cfg.teacher_hidden = int(args.teacher_hidden)
     cfg.train_size     = int(args.train_size)
+    cfg.val_size       = int(args.val_size)
     cfg.test_size      = int(args.test_size)
 
     cfg.lr           = float(args.lr)
@@ -665,6 +695,9 @@ def main() -> None:
 
     cfg.agop_batch        = int(args.agop_batch)
     cfg.agop_proj_samples = int(args.agop_proj_samples)
+    cfg.max_padding_ratio = float(args.max_padding_ratio)
+    cfg.max_train_factor  = float(args.max_train_factor)
+    cfg.fit_patience      = int(args.fit_patience)
     cfg.seed              = int(args.seed)
 
     set_global_seed(cfg.seed)
@@ -715,8 +748,15 @@ def main() -> None:
         teacher_hidden=cfg.teacher_hidden,
         teacher_seed=teacher_seed, data_seed=cfg.seed + 456,
     )
+    val_ds = TeacherStudentDataset(
+        size=cfg.val_size, in_dim=cfg.in_dim, out_dim=cfg.out_dim,
+        teacher_hidden=cfg.teacher_hidden,
+        teacher_seed=teacher_seed, data_seed=cfg.seed + 789,
+    )
     train_loader = torch.utils.data.DataLoader(
         train_ds, batch_size=cfg.batch_size, shuffle=True, drop_last=True, num_workers=0)
+    val_loader   = torch.utils.data.DataLoader(
+        val_ds,   batch_size=cfg.batch_size, shuffle=False, drop_last=False, num_workers=0)
     test_loader  = torch.utils.data.DataLoader(
         test_ds,  batch_size=cfg.batch_size, shuffle=False, drop_last=False, num_workers=0)
 
@@ -732,11 +772,15 @@ def main() -> None:
         model  = build_mlp_model(depth=depth, width=width, cfg=cfg, pad_to_target=True)
         total  = count_params(model)
         pad    = int(total - active)
+        pad_ratio = pad / max(1, total)
+        if pad_ratio > cfg.max_padding_ratio:
+            print(f"  [SKIP] depth={depth}: padding_ratio={pad_ratio:.3f} exceeds max_padding_ratio={cfg.max_padding_ratio:.3f}")
+            continue
 
         print(f"\n[{i+1:02d}/{len(cfg.depth_list)}] depth={depth:2d}  width={width:4d}  "
               f"active={active:,}  pad={pad:,}  total={total:,}")
 
-        metrics, history = train_one_model(model, train_loader, test_loader, cfg, device)
+        metrics, history = train_one_model(model, train_loader, val_loader, test_loader, cfg, device)
         save_curve(history, curve_dir, f"mlp_depth{depth}_width{width}")
 
         z    = agop_z0.to(device)
@@ -751,6 +795,7 @@ def main() -> None:
             "total_params":        int(total),
             "padding_ratio":       float(pad / max(1, total)),
             "train_mse":           float(metrics["train_mse"]),
+            "val_mse":             float(metrics["val_mse"]),
             "test_mse":            float(metrics["test_mse"]),
             "steps_run":           int(metrics["steps_run"]),
             "agop_offdiag_energy": float(off_e),
