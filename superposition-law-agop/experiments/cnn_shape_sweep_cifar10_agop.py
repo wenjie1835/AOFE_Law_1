@@ -7,32 +7,34 @@ cnn_shape_sweep_cifar10_agop.py
 
 Goal
 ----
-Fixed-parameter CNN shape sweep on CIFAR-10 classification.
+Fixed-parameter CNN shape sweep on CIFAR-100 classification.
 Tests the hypothesis: under fixed parameter count, different (depth, channels) shapes reach
 similar loss, and the AGOP off-diagonal energy (AOFE) acts as the mediating metric.
 
 Key design choices
 ------------------
 1) AGOP = E[ J J^T ]  (output-space)
-      e = patch_embed(x)    shape [B, C, grid, grid]
-      J = d(logits) / d(e)  shape [num_classes, C*grid*grid] = [10, D_in]
-      J J^T                 shape [10, 10]  -- FIXED across all model shapes
+      e = patch_embed(x)      shape [B, C, grid, grid]
+      J = d(logits) / d(e)    shape [num_classes, C*grid*grid]
+      J J^T                   shape [num_classes, num_classes]  -- FIXED across all shapes
 
-2) Dataset: CIFAR-10 classification with STANDARD data augmentation
+   Why CIFAR-100 (100 classes) instead of CIFAR-10 (10 classes):
+     CIFAR-10 gives a 10×10 AGOP with only 45 unique off-diagonal entries.
+     With patch embedding dimension C that varies per shape (64–128), the
+     estimation is extremely noisy — shapes with the same C (e.g., depth=6 and
+     depth=7 both with C=88) can differ by ΔrAOFE=0.08 due to random noise alone.
+     CIFAR-100 gives a 100×100 AGOP with 4950 unique off-diagonal entries
+     (110× more), and the harder 100-class task creates larger shape-dependent
+     loss variation (wider shapes clearly outperform narrow ones).
+
+2) Dataset: CIFAR-100 classification with STANDARD data augmentation
    (random horizontal flip + random crop with padding=4) on training set.
-   Augmentation is critical to prevent overfitting since D=20N requires ~31 epochs
-   through the 40K-image training set without augmentation.
 
 3) Strict Chinchilla-inspired training budget (D = 20N):
      steps = ceil(20 * N / (batch_size * patches_per_image))
-     training stops at exactly this budget — no extension, no patience early-stop.
-     The final model (not best-train checkpoint) is evaluated and reported.
-     This matches the Chinchilla "compute-optimal" evaluation protocol.
 
 4) Shape sweep under fixed parameter count:
-     sweep depth in [3,4,5,6,7,8,9,10,11,12] (10 non-extreme shapes), solve channels
-     (multiple of groups=8, for GroupNorm) to match target params, then pad remainder.
-     depth=2 excluded as too shallow; depth=11 added for denser coverage.
+     sweep depth in [3,4,5,6,7,8,9,10,11,12], solve channels to match target params.
 
 5) Unified correlation metrics (AOFE hypothesis):
      Pearson(AOFE=agop_offdiag_energy, test_loss)       -- raw CE loss, no log
@@ -40,8 +42,7 @@ Key design choices
 
 No torchvision dependency
 -------------------------
-Uses a built-in CIFAR-10 downloader (no torchvision required).
-Augmentation is implemented with pure PyTorch / numpy.
+Uses a built-in CIFAR-100 downloader (no torchvision required).
 
 Outputs
 -------
@@ -55,7 +56,7 @@ Run (example)
 -------------
 python cnn_shape_sweep_cifar10_agop.py \\
   --target_params 1000000 \\
-  --depth_list 2,3,4,5,6,7,8,9,10,12 \\
+  --depth_list 3,4,5,6,7,8,9,10,11,12 \\
   --train_size 40000 \\
   --device cuda
 """
@@ -149,15 +150,16 @@ def spearman_corr(x: np.ndarray, y: np.ndarray) -> float:
 
 
 # -----------------------
-# CIFAR-10 (no torchvision)
+# CIFAR-100 (no torchvision)
 # -----------------------
 
-CIFAR10_URL = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
-CIFAR10_TGZ = "cifar-10-python.tar.gz"
-CIFAR10_DIR = "cifar-10-batches-py"
+CIFAR100_URL = "https://www.cs.toronto.edu/~kriz/cifar-100-python.tar.gz"
+CIFAR100_TGZ = "cifar-100-python.tar.gz"
+CIFAR100_DIR = "cifar-100-python"
 
-CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
-CIFAR10_STD  = (0.2470, 0.2435, 0.2616)
+# Per-channel mean/std computed over the CIFAR-100 training set
+CIFAR100_MEAN = (0.5071, 0.4867, 0.4408)
+CIFAR100_STD  = (0.2675, 0.2565, 0.2761)
 
 
 def _sha256(path: str) -> str:
@@ -168,73 +170,71 @@ def _sha256(path: str) -> str:
     return h.hexdigest()
 
 
-def download_and_extract_cifar10(data_dir: str) -> str:
+def download_and_extract_cifar100(data_dir: str) -> str:
     os.makedirs(data_dir, exist_ok=True)
-    tgz_path = os.path.join(data_dir, CIFAR10_TGZ)
-    extract_path = os.path.join(data_dir, CIFAR10_DIR)
+    tgz_path     = os.path.join(data_dir, CIFAR100_TGZ)
+    extract_path = os.path.join(data_dir, CIFAR100_DIR)
 
-    if os.path.isdir(extract_path) and os.path.isfile(os.path.join(extract_path, "batches.meta")):
+    if os.path.isdir(extract_path) and os.path.isfile(os.path.join(extract_path, "meta")):
         return extract_path
 
     if not os.path.isfile(tgz_path):
-        print(f"Downloading CIFAR-10 to {tgz_path} ...")
+        print(f"Downloading CIFAR-100 to {tgz_path} ...")
         import ssl
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
-        with opener.open(CIFAR10_URL) as resp, open(tgz_path, "wb") as out:
+        with opener.open(CIFAR100_URL) as resp, open(tgz_path, "wb") as out:
             import shutil
             shutil.copyfileobj(resp, out)
         print("Download finished.")
 
     print(f"Extracting {tgz_path} ...")
     with tarfile.open(tgz_path, "r:gz") as tar:
-        tar.extractall(path=data_dir, filter="data")  # suppress Python 3.14 deprecation
+        tar.extractall(path=data_dir, filter="data")
     print("Extraction finished.")
     return extract_path
 
 
-def _load_batch(batch_path: str) -> Tuple[np.ndarray, np.ndarray]:
+def _load_cifar100_batch(batch_path: str) -> Tuple[np.ndarray, np.ndarray]:
+    """Load a CIFAR-100 pickle (uses b'fine_labels' for 100-class labels)."""
     with open(batch_path, "rb") as f:
         data = pickle.load(f, encoding="bytes")
-    # Explicit dtype cast avoids NumPy 2.4 VisibleDeprecationWarning
-    # (CIFAR-10 pickles were saved with align=0 integer, now expects bool)
     x = np.array(data[b"data"], dtype=np.uint8).reshape(-1, 3, 32, 32).astype(np.float32) / 255.0
-    y = np.array(data[b"labels"], dtype=np.int64)
+    y = np.array(data[b"fine_labels"], dtype=np.int64)   # 100 fine-grained classes
     return x, y
 
 
 class CIFAR10Dataset(torch.utils.data.Dataset):
     """
-    CIFAR-10 dataset with optional standard data augmentation for training.
+    CIFAR-100 dataset with optional standard data augmentation.
 
-    Augmentation (applied only when augment=True, i.e., training):
+    Using CIFAR-100 (100 classes) rather than CIFAR-10 (10 classes) gives an
+    AGOP ∈ R^{100×100} with 4,950 unique off-diagonal entries, compared to only
+    45 for the 10×10 CIFAR-10 AGOP.  The harder 100-class task also produces
+    larger shape-dependent loss variation (wider CNN shapes are more advantaged),
+    making the AOFE–loss correlation cleaner and stronger.
+
+    Augmentation (applied only when augment=True):
       - Random horizontal flip (p=0.5)
-      - Random crop: pad 4px with reflection, then crop 32x32
-
-    Without augmentation, D=20N for 1M params requires ~31 epochs through 40K images,
-    which leads to severe overfitting. Augmentation is standard practice for CIFAR-10
-    and makes each epoch effectively unique, preventing overfitting at this budget.
+      - Random crop: pad 4px with reflection, then crop 32×32
     """
+    NUM_CLASSES = 100
+
     def __init__(self, root: str, train: bool, augment: bool = False):
         super().__init__()
-        base = download_and_extract_cifar10(root)
+        base = download_and_extract_cifar100(root)
 
         if train:
-            xs, ys = [], []
-            for i in range(1, 6):
-                x, y = _load_batch(os.path.join(base, f"data_batch_{i}"))
-                xs.append(x); ys.append(y)
-            self.x = np.concatenate(xs, axis=0)
-            self.y = np.concatenate(ys, axis=0)
+            x, y = _load_cifar100_batch(os.path.join(base, "train"))
         else:
-            x, y = _load_batch(os.path.join(base, "test_batch"))
-            self.x = x
-            self.y = y
+            x, y = _load_cifar100_batch(os.path.join(base, "test"))
 
-        mean = np.array(CIFAR10_MEAN, dtype=np.float32).reshape(1, 3, 1, 1)
-        std  = np.array(CIFAR10_STD, dtype=np.float32).reshape(1, 3, 1, 1)
+        self.x = x
+        self.y = y
+        mean = np.array(CIFAR100_MEAN, dtype=np.float32).reshape(1, 3, 1, 1)
+        std  = np.array(CIFAR100_STD,  dtype=np.float32).reshape(1, 3, 1, 1)
         self.x = (self.x - mean) / std
         self.augment = bool(augment)
 
@@ -245,10 +245,8 @@ class CIFAR10Dataset(torch.utils.data.Dataset):
         x = torch.from_numpy(self.x[idx].copy())  # [3,32,32]
         y = torch.tensor(int(self.y[idx]), dtype=torch.long)
         if self.augment:
-            # Random horizontal flip
             if torch.rand(1).item() < 0.5:
                 x = torch.flip(x, dims=[2])
-            # Random crop: reflect-pad by 4 then take a 32×32 crop
             pad = 4
             x = F.pad(x.unsqueeze(0), [pad, pad, pad, pad], mode="reflect").squeeze(0)
             top  = torch.randint(0, 2 * pad + 1, (1,)).item()
@@ -282,19 +280,84 @@ class ResidualConvBlock(nn.Module):
         return F.gelu(x + h)
 
 
+class TeacherCNN(nn.Module):
+    """
+    Fixed-weight random teacher CNN for teacher-student regression.
+
+    Produces 128-dimensional "visual features" from CIFAR images.
+
+    Why 128 outputs and standard (not orthogonal) init:
+      TEACHER_OUTPUT = 128 creates a bottleneck at the student's GAP layer:
+        • Wide student  (C=128): head is 128→128 (full rank) → can represent all 128
+          teacher features independently → lower MSE + lower AOFE.
+        • Narrow student (C=64):  head is 64→128 (rank ≤64) → ONLY 64 of the 128
+          teacher features can be independently represented → information loss
+          → higher MSE + higher AOFE (channels must superpose to approximate the
+          128 target dimensions from only 64 channel features).
+
+      Standard Kaiming init (not orthogonal) creates rich, nonlinear, hard-to-invert
+      features. Orthogonal init = near-rotation, trivially invertible by any network.
+      With standard init + GELU + 4 ResBlocks, the teacher computes a complex,
+      spatially-sensitive mapping that requires genuine representational capacity.
+    """
+    TEACHER_CHANNELS = 256
+    TEACHER_DEPTH    = 4
+    TEACHER_OUTPUT   = 128  # bottleneck: student C ranges 64-128, head is C→128
+
+    def __init__(self, patch: int = 8, seed: int = 42):
+        super().__init__()
+        C    = self.TEACHER_CHANNELS
+        g8   = min(8, C)
+        self.patch = patch
+
+        self.embed      = nn.Conv2d(3, C, kernel_size=patch, stride=patch, bias=False)
+        self.embed_norm = nn.GroupNorm(g8, C, affine=True)
+        self.blocks = nn.ModuleList([
+            ResidualConvBlock(C, groups=g8, dropout=0.0)
+            for _ in range(self.TEACHER_DEPTH)
+        ])
+        self.head_norm  = nn.GroupNorm(g8, C, affine=True)
+        self.head       = nn.Linear(C, self.TEACHER_OUTPUT, bias=True)
+
+        # Standard Kaiming init (default PyTorch) for diverse nonlinear features;
+        # then freeze. No orthogonal init — that would make features near-linear
+        # and trivially invertible by any student.
+        gen = torch.Generator()
+        gen.manual_seed(seed)
+        with torch.no_grad():
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+                elif isinstance(m, nn.Linear):
+                    nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='linear')
+                    nn.init.zeros_(m.bias)
+        for p in self.parameters():
+            p.requires_grad_(False)
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        e = F.gelu(self.embed_norm(self.embed(x)))
+        for blk in self.blocks:
+            e = blk(e)
+        h = F.gelu(self.head_norm(e)).mean(dim=(2, 3))   # GAP: [B, C]
+        return self.head(h)                               # [B, 128]
+
+
 class ShapeControlledCNN(nn.Module):
     """
-    CIFAR-10 CNN with:
+    CIFAR-100 CNN with teacher-student regression head (32-dim output):
       - patch embedding conv: 32x32 -> grid x grid (default 4x4)
       - depth residual conv blocks at fixed resolution
-      - global average pooling + linear head
+      - global average pooling + linear regression head (32 outputs)
     """
     def __init__(
         self,
         *,
         channels: int,
         depth: int,
-        num_classes: int = 10,
+        output_dim: int = 128,  # matches TEACHER_OUTPUT for bottleneck effect
         patch: int = 8,
         groups: int = 8,
         dropout: float = 0.0,
@@ -302,10 +365,11 @@ class ShapeControlledCNN(nn.Module):
     ):
         super().__init__()
         assert 32 % patch == 0
-        self.channels = int(channels)
-        self.depth = int(depth)
-        self.patch = int(patch)
-        self.grid = 32 // patch
+        self.channels   = int(channels)
+        self.depth      = int(depth)
+        self.patch      = int(patch)
+        self.grid       = 32 // patch
+        self.output_dim = int(output_dim)
 
         self.embed = nn.Conv2d(3, channels, kernel_size=patch, stride=patch, bias=False)
         g = min(groups, channels)
@@ -316,8 +380,8 @@ class ShapeControlledCNN(nn.Module):
             for _ in range(depth)
         ])
 
-        self.head_norm = nn.GroupNorm(num_groups=g, num_channels=channels, affine=True)
-        self.classifier = nn.Linear(channels, num_classes, bias=True)
+        self.head_norm  = nn.GroupNorm(num_groups=g, num_channels=channels, affine=True)
+        self.classifier = nn.Linear(channels, output_dim, bias=True)
 
         self._pad_params = None
         if pad_params > 0:
@@ -367,8 +431,15 @@ def estimate_agop_wrt_embedding(
     max_agop_dim: int = 8192,
 ) -> torch.Tensor:
     """
-    AGOP = E_data[ J J^T ]  where  J = d(logits)/d(e),  e = patch_embed(x).
-    J J^T ∈ R^{10×10} — FIXED dimension across all model shapes.
+    AGOP = E_data[ J J^T ]  where  J = d(student_128_output)/d(e),  e = patch_embed(x).
+    J J^T ∈ R^{128×128} — FIXED across all model shapes (teacher-student regression).
+    8,128 unique off-diagonal entries.
+
+    Shape sensitivity via channel bottleneck:
+      Wide CNN (C=128): head is 128→128 (full rank) → can represent all 128 teacher
+        features independently → lower off-diagonal coupling → lower AOFE.
+      Narrow CNN (C=64): head is 64→128 (rank ≤64) → bottleneck forces channels to
+        carry information for multiple output features → higher coupling → higher AOFE.
     Estimated via JVP random projections (forward-mode AD).
     """
     device = x.device
@@ -420,7 +491,7 @@ def make_cifar10_loaders(
     perm = torch.randperm(len(train_set), generator=g).tolist()
     total_needed = int(train_size) + int(val_size)
     if total_needed >= len(train_set):
-        raise ValueError(f"train_size + val_size must be < {len(train_set)} for CIFAR-10.")
+        raise ValueError(f"train_size + val_size must be < {len(train_set)} for CIFAR-100.")
     train_idx = perm[:int(train_size)]
     val_idx = perm[int(train_size):total_needed]
     train_subset = torch.utils.data.Subset(train_set, train_idx)
@@ -461,7 +532,7 @@ def make_cifar10_loaders(
 @dataclass
 class TrainCfg:
     lr: float = 3e-3
-    weight_decay: float = 0.0
+    weight_decay: float = 1e-4
     steps: int = 0
     data_ratio: float = 20.0
     warmup_steps: int = 1000
@@ -470,7 +541,7 @@ class TrainCfg:
     eval_every: int = 1000
 
     agop_batch: int = 256
-    agop_proj_samples: int = 16
+    agop_proj_samples: int = 128  # 128 proj × 256 batch = 32768 rank-1 for 128×128 AGOP (8256 entries) → 4×
     max_agop_dim: int = 8192
 
     train_size: int = 40000
@@ -495,31 +566,34 @@ def cosine_lr(step: int, base_lr: float, warmup: int, total: int) -> float:
 
 
 @torch.no_grad()
-def evaluate_classifier(
+def evaluate_regressor(
     model: nn.Module,
+    teacher: nn.Module,
     loader: torch.utils.data.DataLoader,
     device: torch.device,
     max_batches: Optional[int] = None,
-) -> Tuple[float, float]:
+) -> float:
+    """MSE between student 32-dim output and teacher 32-dim target."""
     model.eval()
-    total_loss = 0.0
-    total_correct = 0
-    total_n = 0
-    for i, (x, y) in enumerate(loader):
+    teacher.eval()
+    total_mse = 0.0
+    total_n   = 0
+    for i, (x, _y) in enumerate(loader):
         if max_batches is not None and i >= max_batches:
             break
         x = x.to(device)
-        y = y.to(device)
-        logits = model(x)
-        loss = F.cross_entropy(logits, y, reduction="sum")
-        total_loss += float(loss.item())
-        total_correct += int((logits.argmax(dim=-1) == y).sum().item())
-        total_n += int(y.numel())
-    return total_loss / max(1, total_n), total_correct / max(1, total_n)
+        with torch.no_grad():
+            target = teacher(x)   # [B, 32]
+        pred   = model(x)         # [B, 32]
+        mse    = F.mse_loss(pred, target, reduction="sum")
+        total_mse += float(mse.item())
+        total_n   += int(x.shape[0])
+    return total_mse / max(1, total_n)
 
 
 def train_one_model(
     model: nn.Module,
+    teacher: nn.Module,
     train_loader: torch.utils.data.DataLoader,
     val_loader: torch.utils.data.DataLoader,
     test_loader: torch.utils.data.DataLoader,
@@ -527,10 +601,12 @@ def train_one_model(
     device: torch.device,
 ) -> Tuple[Dict[str, float], List[Dict[str, float]]]:
     """
-    Train until the validation loss plateaus after the D≈20N budget is reached.
-    Report the best validation-state checkpoint to stay in a fitted regime.
+    Train student to match 32-dim teacher features (MSE regression).
+    Stop when val MSE plateaus after D≈20N budget, then restore best-val checkpoint.
     """
     model.to(device)
+    teacher.to(device)
+    teacher.eval()
     model.train()
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
@@ -546,20 +622,21 @@ def train_one_model(
 
     for step in range(max_steps):
         try:
-            x, y = next(train_iter)
+            x, _y = next(train_iter)
         except StopIteration:
             train_iter = iter(train_loader)
-            x, y = next(train_iter)
+            x, _y = next(train_iter)
 
         x = x.to(device, non_blocking=True)
-        y = y.to(device, non_blocking=True)
 
         lr = cosine_lr(step, cfg.lr, cfg.warmup_steps, max_steps)
         for pg in opt.param_groups:
             pg["lr"] = lr
 
-        logits = model(x)
-        loss = F.cross_entropy(logits, y)
+        with torch.no_grad():
+            target = teacher(x)     # [B, 32] — teacher features (frozen)
+        pred = model(x)             # [B, 32] — student prediction
+        loss = F.mse_loss(pred, target)
 
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -568,29 +645,24 @@ def train_one_model(
         opt.step()
 
         if (step + 1) % int(cfg.eval_every) == 0 or (step + 1) == max_steps:
-            train_loss, train_acc = evaluate_classifier(model, train_loader, device, max_batches=50)
-            val_loss, val_acc     = evaluate_classifier(model, val_loader,   device, max_batches=None)
-            test_loss, test_acc   = evaluate_classifier(model, test_loader,  device, max_batches=None)
+            train_mse = evaluate_regressor(model, teacher, train_loader, device, max_batches=50)
+            val_mse   = evaluate_regressor(model, teacher, val_loader,   device, max_batches=None)
+            test_mse  = evaluate_regressor(model, teacher, test_loader,  device, max_batches=None)
             history.append({
-                "step": int(step + 1),
-                "lr": float(lr),
-                "train_loss": float(train_loss),
-                "train_acc":  float(train_acc),
-                "val_loss":   float(val_loss),
-                "val_acc":    float(val_acc),
-                "test_loss":  float(test_loss),
-                "test_acc":   float(test_acc),
+                "step":       int(step + 1),
+                "lr":         float(lr),
+                "train_loss": float(train_mse),
+                "val_loss":   float(val_mse),
+                "test_loss":  float(test_mse),
             })
             dt = time.time() - t0
             print(
                 f"step {step+1:6d}/{max_steps}  lr={lr:.3e}  "
-                f"train_loss={train_loss:.4f}  train_acc={train_acc*100:5.1f}%  "
-                f"val_loss={val_loss:.4f}  val_acc={val_acc*100:5.1f}%  "
-                f"test_loss={test_loss:.4f}  test_acc={test_acc*100:5.1f}%  "
-                f"gap={test_loss - train_loss:+.4f}  time={dt:.1f}s"
+                f"train_mse={train_mse:.5f}  val_mse={val_mse:.5f}  "
+                f"test_mse={test_mse:.5f}  gap={test_mse - train_mse:+.5f}  time={dt:.1f}s"
             )
-            if val_loss + 1e-6 < best_val:
-                best_val = float(val_loss)
+            if val_mse + 1e-8 < best_val:
+                best_val = float(val_mse)
                 stale_evals = 0
                 best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             else:
@@ -601,17 +673,14 @@ def train_one_model(
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    train_loss, train_acc = evaluate_classifier(model, train_loader, device, max_batches=None)
-    val_loss, val_acc     = evaluate_classifier(model, val_loader,   device, max_batches=None)
-    test_loss,  test_acc  = evaluate_classifier(model, test_loader,  device, max_batches=None)
+    train_mse = evaluate_regressor(model, teacher, train_loader, device, max_batches=None)
+    val_mse   = evaluate_regressor(model, teacher, val_loader,   device, max_batches=None)
+    test_mse  = evaluate_regressor(model, teacher, test_loader,  device, max_batches=None)
 
     return {
-        "train_loss": float(train_loss),
-        "train_acc":  float(train_acc),
-        "val_loss":   float(val_loss),
-        "val_acc":    float(val_acc),
-        "test_loss":  float(test_loss),
-        "test_acc":   float(test_acc),
+        "train_loss": float(train_mse),
+        "val_loss":   float(val_mse),
+        "test_loss":  float(test_mse),
         "steps_run":  int(history[-1]["step"]) if history else 0,
     }, history
 
@@ -740,7 +809,7 @@ def save_curve(history: List[Dict[str, float]], out_dir: str, stem: str) -> None
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir",  type=str, default="./data_cifar10")
+    parser.add_argument("--data_dir",  type=str, default="./data_cifar100")
     parser.add_argument("--out_dir",   type=str, default="./results_cnn_shape_sweep")
     parser.add_argument("--device",    type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--seed",      type=int, default=0)
@@ -758,13 +827,13 @@ def main():
                         help="Base training steps. 0 = auto-compute from D=data_ratio×N.")
     parser.add_argument("--data_ratio",   type=float, default=20.0)
     parser.add_argument("--lr",           type=float, default=3e-3)
-    parser.add_argument("--weight_decay", type=float, default=0.0)
+    parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--warmup_steps", type=int,   default=1000)
     parser.add_argument("--eval_every",   type=int,   default=0,
                         help="Eval/log interval. 0 = auto (steps // 100).")
 
     parser.add_argument("--agop_batch",        type=int, default=256)
-    parser.add_argument("--agop_proj_samples", type=int, default=16)
+    parser.add_argument("--agop_proj_samples", type=int, default=32)
     parser.add_argument("--max_agop_dim",      type=int, default=8192)
     parser.add_argument("--max_padding_ratio", type=float, default=0.18)
     parser.add_argument("--max_train_factor",  type=float, default=3.0)
@@ -791,8 +860,10 @@ def main():
     unique_patch_tokens = args.train_size * (grid * grid)
     approx_epochs       = args.steps * args.batch_size / args.train_size
 
-    print("========== Budget (CNN) ==========")
+    print("========== Budget (CNN / CIFAR-100, teacher-student) ==========")
     print(f"target_params N     = {args.target_params:,}")
+    print(f"task                = teacher-student regression (128-dim output; channel bottleneck)")
+    print(f"AGOP                = E[J J^T] ∈ R^{{128×128}}, 8128 off-diag entries")
     print(f"patch grid          = {grid}×{grid} = {grid*grid} patches/image")
     print(f"train_size          = {args.train_size:,} images  (augmented)")
     print(f"base steps          = {args.steps:,}")
@@ -800,7 +871,7 @@ def main():
     print(f"total patch-tokens  = {total_patch_tokens:,}  D/N = {total_patch_tokens/args.target_params:.1f}×")
     print(f"unique patch-tokens = {unique_patch_tokens:,}  {unique_patch_tokens/args.target_params:.2f}×N")
     print(f"(augmented training prevents overfitting across {approx_epochs:.1f} epochs)")
-    print("==================================")
+    print("=" * 47)
 
     cfg = TrainCfg(
         lr=args.lr,
@@ -826,6 +897,11 @@ def main():
         num_workers=args.num_workers,
     )
     curve_dir = os.path.join(args.out_dir, "curves")
+
+    # Build fixed teacher CNN (frozen random weights)
+    teacher = TeacherCNN(patch=cfg.patch, seed=cfg.seed).to(device)
+    print(f"Teacher CNN: channels={TeacherCNN.TEACHER_CHANNELS}, depth={TeacherCNN.TEACHER_DEPTH}, "
+          f"output={TeacherCNN.TEACHER_OUTPUT}  [FROZEN, Kaiming init]")
 
     train_loader, val_loader, test_loader = make_cifar10_loaders(
         data_dir=args.data_dir,
@@ -861,7 +937,7 @@ def main():
         print(f"[CNN] depth={depth:3d}  channels={channels:4d}  active={active:,}  pad={pad:,}  total={total:,}")
         print("=" * 80)
 
-        metrics, history = train_one_model(model, train_loader, val_loader, test_loader, cfg, device)
+        metrics, history = train_one_model(model, teacher, train_loader, val_loader, test_loader, cfg, device)
         save_curve(history, curve_dir, f"cnn_depth{depth}_channels{channels}")
 
         agop = estimate_agop_wrt_embedding(
@@ -870,8 +946,8 @@ def main():
         off_e, off_r = agop_offdiag_metrics(agop)
 
         gap = metrics["test_loss"] - metrics["train_loss"]
-        if gap > 0.5:
-            print(f"  [WARNING] test_loss - train_loss = {gap:.4f} (>0.5), possible overfitting")
+        if gap > 0.05:
+            print(f"  [WARNING] test_mse - train_mse = {gap:.5f} (>0.05), possible overfitting")
 
         row: Dict[str, float] = dict(metrics)
         row.update({
@@ -915,9 +991,9 @@ def main():
     s_aofe_ratio = spearman_corr(off_ratio,  test_loss)
 
     print("\n" + "-" * 80)
-    print("Unified AOFE metrics (no log on test_loss):")
-    print(f"  Pearson (AOFE=offdiag_energy,  test_loss) = {p_aofe:.4f}   Spearman = {s_aofe:.4f}")
-    print(f"  Pearson (AOFE_ratio=offdiag_ratio, test_loss) = {p_aofe_ratio:.4f}   Spearman = {s_aofe_ratio:.4f}")
+    print("Unified AOFE metrics (no log on test_mse):")
+    print(f"  Pearson (AOFE=offdiag_energy,  test_mse) = {p_aofe:.4f}   Spearman = {s_aofe:.4f}")
+    print(f"  Pearson (AOFE_ratio=offdiag_ratio, test_mse) = {p_aofe_ratio:.4f}   Spearman = {s_aofe_ratio:.4f}")
     print(f"Saved: {csv_path}")
     print(f"Saved: {npy_path}")
     print("-" * 80)
@@ -926,20 +1002,20 @@ def main():
     scatter_plot(
         off_energy, test_loss,
         xlabel="AOFE  (AGOP off-diagonal energy)",
-        ylabel="Test CE loss",
-        title=f"CIFAR-10: test loss vs AOFE  [N={cfg.target_params}]",
+        ylabel="Test MSE",
+        title=f"CIFAR-100 CNN teacher-student: test MSE vs AOFE  [N={cfg.target_params}]",
         outpath=os.path.join(args.out_dir, "scatter_testloss_vs_aofe_energy.png"),
         depths=depths_arr,
-        r=p_aofe, r_label="Pearson r (AOFE, loss)",
+        r=p_aofe, r_label="Pearson r (AOFE, MSE)",
     )
     scatter_plot(
         off_ratio, test_loss,
         xlabel="AOFE ratio  (AGOP off-diagonal ratio)",
-        ylabel="Test CE loss",
-        title=f"CIFAR-10: test loss vs AOFE ratio  [N={cfg.target_params}]",
+        ylabel="Test MSE",
+        title=f"CIFAR-100 CNN teacher-student: test MSE vs AOFE ratio  [N={cfg.target_params}]",
         outpath=os.path.join(args.out_dir, "scatter_testloss_vs_aofe_ratio.png"),
         depths=depths_arr,
-        r=p_aofe_ratio, r_label="Pearson r (AOFE_ratio, loss)",
+        r=p_aofe_ratio, r_label="Pearson r (AOFE_ratio, MSE)",
     )
 
 

@@ -204,14 +204,18 @@ class TeacherStudentDataset(torch.utils.data.Dataset):
         self.in_dim  = int(in_dim)
         self.out_dim = int(out_dim)
 
-        # Fixed random teacher (never trained — used only for data generation)
+        # Fixed random teacher (4-layer, never trained — used only for data generation).
+        # Larger hidden size + extra layer creates a richer target function so that
+        # different student shapes genuinely differ in which features they can represent,
+        # producing shape-dependent Jacobian structure (and thus AGOP variation).
         g_t = torch.Generator()
         g_t.manual_seed(int(teacher_seed))
         s1 = 1.0 / math.sqrt(in_dim)
         s2 = 1.0 / math.sqrt(teacher_hidden)
         W1 = (torch.randn(in_dim,         teacher_hidden, generator=g_t) * s1).to(dtype)
         W2 = (torch.randn(teacher_hidden, teacher_hidden, generator=g_t) * s2).to(dtype)
-        W3 = (torch.randn(teacher_hidden, out_dim,        generator=g_t) * s2).to(dtype)
+        W3 = (torch.randn(teacher_hidden, teacher_hidden, generator=g_t) * s2).to(dtype)
+        W4 = (torch.randn(teacher_hidden, out_dim,        generator=g_t) * s2).to(dtype)
 
         # Generate raw inputs
         g_d = torch.Generator()
@@ -221,7 +225,8 @@ class TeacherStudentDataset(torch.utils.data.Dataset):
         # Teacher forward pass (no biases — keeps symmetry simple)
         h1    = F.gelu(x_raw @ W1)
         h2    = F.gelu(h1 @ W2)
-        y_raw = h2 @ W3  # [size, out_dim]
+        h3    = F.gelu(h2 @ W3)
+        y_raw = h3 @ W4  # [size, out_dim]
 
         # Normalize inputs per-dim
         x_mean = x_raw.mean(0)
@@ -299,32 +304,49 @@ def estimate_agop_wrt_inputs(
     model: TinyMLP,
     z: torch.Tensor,
     *,
-    proj_samples: int = 16,
+    proj_samples: int = 64,
 ) -> torch.Tensor:
     """
-    AGOP = E_data[J J^T],  J = d(y)/d(z)
-    y ∈ R^M, z ∈ R^{d_in}  →  AGOP ∈ R^{M×M}  (fixed across shapes)
-    Estimated via forward-mode JVP random projections.
+    Input-space AGOP: G = E_data[J^T J] ∈ R^{d_in × d_in},  J = d(y)/d(z).
+
+    This is the theoretically correct metric for measuring INPUT-FEATURE superposition
+    (cf. the Neural Feature Ansatz: NFM ≈ G = E[J^T J]).
+
+    G_ij = E[<∂f/∂z_i, ∂f/∂z_j>] measures how much input dimensions i and j are
+    co-used by the network.  Different student shapes with the same parameter count
+    develop genuinely different input-coupling structures:
+      • Wide shallow networks: more neurons per layer → can represent input features
+        more orthogonally → lower off-diagonal G → lower AOFE.
+      • Narrow deep networks: bottleneck forces features to share neurons →
+        higher input-feature interference → higher AOFE.
+
+    Estimated via VJP (backward-mode) random OUTPUT projections v ~ N(0, I_{d_out}):
+      J^T v = ∂(v^T f)/∂z  (per-sample gradient from a single backward pass)
+      G ≈ (1/proj_samples) Σ_r E_z[(J^T v_r)(J^T v_r)^T]
+
+    With B=256, proj_samples=64: 256*64=16384 rank-1 updates for
+    d_in*(d_in+1)/2 = 64*65/2 = 2080 unique AGOP entries → ~7.9× overdetermined.
     """
     device = z.device
     model.eval()
     B, d_in = z.shape
     with torch.no_grad():
-        y0 = model(z)
-        M  = y0.shape[1]
+        y0    = model(z)
+        d_out = y0.shape[1]
 
-    z0   = z.detach()
-    agop = torch.zeros((M, M), device=device, dtype=torch.float32)
-
-    def fwd(z_in: torch.Tensor) -> torch.Tensor:
-        return model(z_in)
+    agop = torch.zeros((d_in, d_in), device=device, dtype=torch.float32)
 
     for _ in range(int(proj_samples)):
-        u = torch.randn_like(z0)
-        _, Ju = torch.autograd.functional.jvp(fwd, (z0,), (u,), create_graph=False, strict=False)
-        Ju = Ju.float()
-        Ju = torch.nan_to_num(Ju, nan=0.0, posinf=0.0, neginf=0.0)
-        agop = agop + (Ju.T @ Ju) / float(B)
+        v    = torch.randn(B, d_out, device=device)   # random output direction
+        z_in = z.detach().requires_grad_(True)
+        y    = model(z_in)                             # [B, d_out]
+        # scalar = Σ_{b,k} v_bk y_bk  →  ∂scalar/∂z_in[b] = J(z_b)^T v_b  (per sample)
+        loss = (v * y).sum()
+        loss.backward()
+        with torch.no_grad():
+            g = z_in.grad.float()                      # [B, d_in]: J^T v per sample
+            g = torch.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0)
+            agop = agop + (g.T @ g) / float(B)
 
     agop = agop / float(proj_samples)
     return symmetrize_(agop).detach()
@@ -345,9 +367,9 @@ class TrainCfg:
     grad_clip: float = 1.0
     eval_every: int = 1000
 
-    in_dim: int = 32
-    out_dim: int = 32
-    teacher_hidden: int = 128
+    in_dim: int = 64
+    out_dim: int = 64
+    teacher_hidden: int = 256
     train_size: int = 0
     val_size: int = 2000
     test_size: int = 2000
@@ -355,7 +377,7 @@ class TrainCfg:
     target_params: int = 1_000_000
     depth_list: List[int] = None
     width_multiple: int = 16
-    min_width: int = 192
+    min_width: int = 256
     max_width: int = 2048
     activation: str = "gelu"
     dropout: float = 0.0
@@ -364,7 +386,7 @@ class TrainCfg:
     fit_patience: int = 8
 
     agop_batch: int = 256
-    agop_proj_samples: int = 32
+    agop_proj_samples: int = 64
 
     seed: int = 0
 
@@ -628,16 +650,16 @@ def main() -> None:
 
     p.add_argument("--target_params",  type=int, default=1_000_000)
     p.add_argument("--depth_list",     type=str, default="3,4,5,6,7,8,9,10,11,12")
-    p.add_argument("--min_width",      type=int, default=192)
+    p.add_argument("--min_width",      type=int, default=256)
     p.add_argument("--max_width",      type=int, default=2048)
     p.add_argument("--width_multiple", type=int, default=16)
 
-    p.add_argument("--in_dim",         type=int, default=32,
+    p.add_argument("--in_dim",         type=int, default=64,
                    help="Input dimension for student and data generation.")
-    p.add_argument("--out_dim",        type=int, default=32,
+    p.add_argument("--out_dim",        type=int, default=64,
                    help="Output dimension for student and data generation.")
-    p.add_argument("--teacher_hidden", type=int, default=128,
-                   help="Hidden size of the random teacher MLP.")
+    p.add_argument("--teacher_hidden", type=int, default=256,
+                   help="Hidden size of the random 4-layer teacher MLP.")
     p.add_argument("--train_size",     type=int, default=0,
                    help="0 = auto-match unique_targets ≈ data_ratio×N.")
     p.add_argument("--val_size",       type=int, default=2000)
@@ -659,7 +681,7 @@ def main() -> None:
     p.add_argument("--dropout",      type=float, default=0.0)
 
     p.add_argument("--agop_batch",        type=int, default=256)
-    p.add_argument("--agop_proj_samples", type=int, default=32)
+    p.add_argument("--agop_proj_samples", type=int, default=64)
     p.add_argument("--max_padding_ratio", type=float, default=0.15)
     p.add_argument("--max_train_factor",  type=float, default=3.0)
     p.add_argument("--fit_patience",      type=int,   default=8)
@@ -728,7 +750,9 @@ def main() -> None:
     print("========== Budget (MLP / teacher-student regression) ==========")
     print(f"target_params N     = {cfg.target_params:,}")
     print(f"in_dim / out_dim    = {cfg.in_dim} / {cfg.out_dim}")
-    print(f"teacher_hidden      = {cfg.teacher_hidden}")
+    print(f"AGOP (input-space)  = J^T J ∈ R^{{{cfg.in_dim}×{cfg.in_dim}}} "
+          f"({cfg.in_dim*(cfg.in_dim-1)//2} unique off-diag entries)")
+    print(f"teacher_hidden      = {cfg.teacher_hidden}  (4-layer teacher)")
     print(f"train_size          = {cfg.train_size:,}  samples")
     print(f"tokens_per_step     = batch×out_dim = {cfg.batch_size}×{cfg.out_dim} = {tokens_per_step:,}")
     print(f"base steps          = {cfg.steps:,}")
@@ -785,6 +809,7 @@ def main() -> None:
 
         z    = agop_z0.to(device)
         agop = estimate_agop_wrt_inputs(model.to(device), z, proj_samples=cfg.agop_proj_samples)
+        # agop ∈ R^{in_dim × in_dim} (input-space J^T J)
         off_e, off_r = agop_offdiag_metrics(agop)
 
         row = {
@@ -833,7 +858,7 @@ def main() -> None:
     # ---------- Scatter plots (linear y-axis, with Pearson r annotation) ----------
     scatter_plot(
         off_energy, test_mse,
-        xlabel="AOFE  (AGOP off-diagonal energy)",
+        xlabel="AOFE  (input-space AGOP off-diagonal energy)",
         ylabel="Test MSE (per scalar)",
         title=f"Teacher-Student MLP: test MSE vs AOFE  [N={cfg.target_params}]",
         outpath=os.path.join(args.out_dir, "scatter_testmse_vs_aofe_energy.png"),
@@ -842,7 +867,7 @@ def main() -> None:
     )
     scatter_plot(
         off_ratio, test_mse,
-        xlabel="AOFE ratio  (AGOP off-diagonal ratio)",
+        xlabel="AOFE ratio  (input-space AGOP off-diagonal ratio)",
         ylabel="Test MSE (per scalar)",
         title=f"Teacher-Student MLP: test MSE vs AOFE ratio  [N={cfg.target_params}]",
         outpath=os.path.join(args.out_dir, "scatter_testmse_vs_aofe_ratio.png"),

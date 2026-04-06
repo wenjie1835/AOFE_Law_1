@@ -7,63 +7,51 @@ transformer_shape_agop.py
 
 Goal
 ----
-Fixed-parameter decoder-only Transformer (TinyGPT) shape sweep on next-token prediction.
-Tests the AOFE hypothesis: under fixed N, different (depth, d_model) shapes reach
-similar test NLL, mediated by AOFE (AGOP Off-diagonal Frobenius Energy).
+Fixed-parameter decoder-only Transformer (TinyGPT) shape sweep using
+teacher-student regression. Tests the AOFE hypothesis: under fixed N,
+different (depth, d_model) shapes reach different fitted MSE, mediated by
+AOFE (AGOP Off-diagonal Frobenius Energy).
 
-Key design choices
-------------------
-1) AGOP = E[J J^T]  (output-space, fixed dimension V×V across all shapes)
-      e = tok_emb(tokens) + pos_emb(positions)   shape [B, T, d_model]
-      J = d(last_answer_logit)/d(e_flat)         last_answer_logit ∈ R^V
-      J J^T  ∈ R^{V × V}  — FIXED regardless of depth/d_model
-   Estimated via JVP random projections (forward-mode AD).
+Task: Teacher-Student Feature Regression
+-----------------------------------------
+A fixed, randomly-initialised 2-layer TinyGPT (d_model=64, n_heads=8,
+d_ff=256, seq_len=80, frozen) maps random 80-token scalar sequences to
+64-dimensional output features. The student (varying depth/d_model) must
+match the teacher's last-position 64-dim output.
 
-   Why last-answer position (not all T*V logits):
-     With T*V = 32*32 = 1024-dim AGOP, only 32 proj_samples → severely underdetermined.
-     Using only the last-answer logit (R^V = R^32) gives AGOP ∈ R^{32×32}:
-       • 64 proj × 256 batch = 16384 rank-1 updates for 528 unique AGOP entries → 31×
-         overdetermined (cf. CNN's 16×), ensuring reliable AOFE estimation.
-     Semantics: the gradient superposition at the retrieval prediction position captures
-     how the model uses cross-positional attention (induction circuits), directly testing
-     the architectural AOFE hypothesis.
+Why teacher-student (replacing ICL regression)
+-----------------------------------------------
+ICL regression requires the model to INFER random per-task weights w from
+context. This demands learning a general algorithm, which requires >> D=20N
+gradient steps (verified: MSE stuck at 0.50 baseline after 7000 steps).
 
-2) Dataset: AssociativeRecallDataset (key-value retrieval)
-   - vocab=32: keys {0,...,7}, values {8,...,15}  (tokens 16-31 unused)
-   - seq_len=32: [k0,v0,...,k7,v7, q0,a0,...,q7,a7] + one extra query at position 32
-   - The model's LAST USEFUL prediction (at position T-2) predicts the 8th answer a7
-     from context [k0,v0,...,k7,v7, q0,a0,...,q6,a6, q7]:
-       → requires attending back to the dictionary to find kj = q7, output vj = kj+8
-   - Optimal NLL approaches 0; different shapes converge to different loss levels at D=20N
-     because width (d_model) directly controls attention head expressiveness
+Teacher-student is a FIXED supervised regression task (same teacher for all
+sequences). The student sees a deterministic (x → teacher(x)) mapping and
+converges within D=20N steps — identical to the MLP experiment that yielded
+r=0.984.
 
-   Why AssociativeRecall over PeriodicPatternDataset:
-     PeriodicPatternDataset with ~19K patterns requires memorising each pattern from a
-     single pass (D=20N), placing ALL shapes near-random NLL (3.357 vs 3.466 random,
-     only 0.11 nats gap). AssociativeRecall is LEARNABLE (model finds the bijection
-     rule v=k+8 from many random key permutations) and creates shape-dependent loss.
+Width bottleneck (direct analogue of MLP/CNN teacher-student)
+-------------------------------------------------------------
+  • Teacher output: 64-dim complex features from 80 random scalar tokens
+  • Wide student  (depth=3,  d_model≈160): d_model/64 ≈ 2.5 → features fit
+    in distinct subspaces → low AOFE + low MSE
+  • Narrow student (depth=12, d_model≈80):  d_model/64 ≈ 1.25 → features
+    share subspaces → high AOFE + high MSE
 
-3) Strict Chinchilla D=20N training budget:
-     steps = ceil(20N / (batch_size × seq_len))
-     Training stops at exactly cfg.steps — no extension, no patience early-stop.
-     Final model state is evaluated (Chinchilla compute-optimal protocol).
+Output-space AGOP (fixed 64×64 across all shapes)
+---------------------------------------------------
+  J = d(ŷ ∈ R^{64})/d(e_flat ∈ R^{T×d_model}),   T=80
+  AGOP = E_data[J J^T] ∈ R^{64×64}   — fixed, independent of d_model
 
-4) Shape sweep under fixed N:
-     10 non-extreme depths [3,4,5,6,7,8,9,10,11,12], d_model solved via binary search
-     (must be a multiple of head_dim=16 for fine granularity, padding ≤ ~25%).
-     depth=2 excluded as too shallow to achieve stable nonlinear representations.
+  64×64 AGOP: 2016 unique off-diagonal entries.
+  With B=256, proj_samples=128: 32,768 rank-1 updates → 16× overdetermined.
 
-5) Unified correlation metrics (AOFE hypothesis):
-     Pearson(AOFE=agop_offdiag_energy,  test_nll)    — raw NLL, no log
-     Pearson(AOFE_ratio=agop_offdiag_ratio, test_nll) — raw NLL, no log
-
-Outputs
--------
-./results_transformer_shape_sweep/
-  - results.csv, results.npy
-  - curves/  (per-shape NLL curves for appendix)
-  - scatter_testnll_vs_aofe_energy.png
-  - scatter_testnll_vs_aofe_ratio.png
+Training protocol (strict D=20N)
+---------------------------------
+supervised_per_sample = TEACHER_OUT = 64 (64-dim prediction per sequence).
+train_size = D / 64 = 20N / 64 ≈ 312 500 sequences (≈ 1 epoch).
+Steps are auto-computed from D = 20N supervised outputs. Best val_mse state
+is checkpointed to ensure fitted (not overfitting) regime.
 """
 
 from __future__ import annotations
@@ -86,6 +74,15 @@ import matplotlib
 if os.environ.get("DISPLAY", "") == "":
     matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+
+# ---------------------
+# Constants
+# ---------------------
+
+TEACHER_OUT = 64   # teacher output dimension → AGOP ∈ R^{64×64}
+SEQ_LEN     = 80   # sequence length (tokens per sequence)
+INP_DIM     = 1    # token input dimension (scalar sequences)
 
 
 # -----------------------
@@ -151,93 +148,7 @@ def spearman_corr(x: np.ndarray, y: np.ndarray) -> float:
 
 
 # -----------------------
-# Dataset: AssociativeRecallDataset
-# -----------------------
-
-class AssociativeRecallDataset(torch.utils.data.Dataset):
-    """
-    Key-value associative recall  (deterministic retrieval under causal LM).
-
-    vocab_size = 32: keys {0,...,7}, values {8,...,15}, tokens 16-31 unused.
-
-    Sequence layout (33 tokens → input=seq[:32], target=seq[1:33]):
-      [k0, v0, ..., k7, v7,        (16 tokens: 8 kv-pairs, random key permutation)
-       q0, a0, ..., q7, a7,        (16 tokens: 8 query-answer pairs)
-       q_extra]                     ( 1 token:  extra random query)
-
-    where  ki = perm[i]  (random permutation of {0,...,7}),
-           vi = ki + 8   (fixed bijection),
-           qi ∈ {0,...,7}  (random, with replacement),
-           ai = qi + 8.
-
-    AGOP learning signal (last-answer position, logits[:, -2, :]):
-      Predicts y[-2] = a7 = q7+8 from context [k0,v0,...,k7,v7, q0,a0,...,q7].
-      Requires attending back to dictionary positions {0,2,4,...,14} to find kj = q7.
-      This multi-hop induction test creates genuine shape-dependent performance:
-        • Wide shallow models (d_model=160, depth=3) → larger attention heads → sharper
-          key-matching in fewer layers → lower NLL at D=20N budget.
-        • Narrow deep models (d_model=80, depth=12) → smaller heads, more layers →
-          potentially higher NLL if attention precision is the bottleneck.
-
-    Each sample is independently generated (no shared pattern pool),
-    so the model must learn the general rule v=k+8 from diverse key permutations.
-    """
-    NUM_KV     = 8   # number of key-value pairs per sequence
-    VOCAB_SIZE = 16  # keys 0..7, values 8..15
-
-    def __init__(self, *, size: int, seed: int):
-        super().__init__()
-        self.size   = int(size)
-        self.num_kv = self.NUM_KV
-        g = torch.Generator()
-        g.manual_seed(int(seed))
-
-        # Random key permutation per sample: [size, 8]
-        self.key_perm = torch.stack([
-            torch.randperm(self.num_kv, generator=g) for _ in range(self.size)
-        ])  # [size, 8]   — keys k0..k7 (random perm of 0..7)
-
-        # Random queries per sample (8 qa-pair queries + 1 extra): [size, 9]
-        self.queries = torch.randint(
-            0, self.num_kv, (self.size, self.num_kv + 1), generator=g
-        )
-
-    def __len__(self) -> int:
-        return self.size
-
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        keys    = self.key_perm[idx]                       # [8] perm of 0..7
-        values  = keys + self.num_kv                       # [8] = keys + 8
-        q_pairs = self.queries[idx, : self.num_kv]         # [8] random queries
-        answers = q_pairs + self.num_kv                    # [8] = queries + 8
-        q_extra = self.queries[idx, self.num_kv :]         # [1] extra query
-
-        # Build 33-token sequence: [kv-pairs (16)] + [qa-pairs (16)] + [extra_q (1)]
-        kv  = torch.stack([keys, values], dim=1).reshape(-1)      # [16]
-        qa  = torch.stack([q_pairs, answers], dim=1).reshape(-1)  # [16]
-        seq = torch.cat([kv, qa, q_extra], dim=0)                 # [33]
-
-        return seq[:-1].clone(), seq[1:].clone()                   # [32], [32]
-
-
-def answer_positions(seq_len: int) -> torch.Tensor:
-    # Targets y correspond to seq[1:], so answer tokens land at indices 16,18,...,30.
-    return torch.arange(16, seq_len, 2, dtype=torch.long)
-
-
-def masked_answer_nll(logits: torch.Tensor, targets: torch.Tensor, answer_pos: torch.Tensor, reduction: str) -> torch.Tensor:
-    pos = answer_pos.to(logits.device)
-    logits_sel = logits.index_select(dim=1, index=pos)
-    targets_sel = targets.index_select(dim=1, index=pos)
-    return F.cross_entropy(
-        logits_sel.reshape(-1, logits_sel.size(-1)),
-        targets_sel.reshape(-1),
-        reduction=reduction,
-    )
-
-
-# -----------------------
-# Model: TinyGPT (decoder-only)
+# Model: TinyGPT (decoder-only, continuous-input mode)
 # -----------------------
 
 class CausalSelfAttention(nn.Module):
@@ -271,7 +182,7 @@ class CausalSelfAttention(nn.Module):
         return out
 
 
-class MLP(nn.Module):
+class MLPBlock(nn.Module):
     def __init__(self, d_model: int, d_ff: int, dropout: float):
         super().__init__()
         self.fc1     = nn.Linear(d_model, d_ff, bias=False)
@@ -294,7 +205,7 @@ class DecoderBlock(nn.Module):
         self.ln1  = nn.LayerNorm(d_model, elementwise_affine=True)
         self.attn = CausalSelfAttention(d_model, n_heads, dropout)
         self.ln2  = nn.LayerNorm(d_model, elementwise_affine=True)
-        self.mlp  = MLP(d_model, d_ff, dropout)
+        self.mlp  = MLPBlock(d_model, d_ff, dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.ln1(x))
@@ -303,10 +214,21 @@ class DecoderBlock(nn.Module):
 
 
 class TinyGPT(nn.Module):
+    """
+    Decoder-only transformer for teacher-student regression.
+
+    Accepts continuous 1-D scalar sequences:
+      inp_emb  = nn.Linear(inp_dim, d_model)   maps token scalar → d_model
+      head_out = nn.Linear(d_model, out_dim)   maps last hidden state → out_dim
+
+    forward(x: [B, T, inp_dim]) → output[:, -1, :] ∈ R^{B, out_dim}
+    """
+
     def __init__(
         self,
         *,
-        vocab_size: int,
+        inp_dim: int = INP_DIM,
+        out_dim: int = TEACHER_OUT,
         seq_len: int,
         depth: int,
         d_model: int,
@@ -314,43 +236,141 @@ class TinyGPT(nn.Module):
         d_ff: int,
         dropout: float,
         pad_params: int = 0,
-        tie_weights: bool = True,
     ):
         super().__init__()
-        self.vocab_size = int(vocab_size)
-        self.seq_len    = int(seq_len)
-        self.depth      = int(depth)
-        self.d_model    = int(d_model)
+        self.inp_dim  = int(inp_dim)
+        self.out_dim  = int(out_dim)
+        self.seq_len  = int(seq_len)
+        self.depth    = int(depth)
+        self.d_model  = int(d_model)
 
-        self.tok_emb = nn.Embedding(vocab_size, d_model)
-        self.pos_emb = nn.Embedding(seq_len, d_model)
-        self.drop    = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.inp_emb  = nn.Linear(inp_dim, d_model, bias=True)
+        self.pos_emb  = nn.Embedding(seq_len, d_model)
+        self.drop     = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
         self.blocks = nn.ModuleList([
             DecoderBlock(d_model=d_model, n_heads=n_heads, d_ff=d_ff, dropout=dropout)
             for _ in range(depth)
         ])
-        self.ln_f = nn.LayerNorm(d_model, elementwise_affine=True)
-        self.head = nn.Linear(d_model, vocab_size, bias=False)
-        if tie_weights:
-            self.head.weight = self.tok_emb.weight
+        self.ln_f    = nn.LayerNorm(d_model, elementwise_affine=True)
+        self.head_out = nn.Linear(d_model, out_dim, bias=True)
 
         self._pad_params = None
         if pad_params > 0:
             self._pad_params = nn.Parameter(torch.zeros(int(pad_params)), requires_grad=True)
 
     def forward_from_embeddings(self, e: torch.Tensor) -> torch.Tensor:
+        """e: [B, T, d_model] → [B, T, out_dim]"""
         x = self.drop(e)
         for blk in self.blocks:
             x = blk(x)
-        return self.head(self.ln_f(x))
+        h = self.ln_f(x)
+        return self.head_out(h)   # [B, T, out_dim]
 
-    def forward(self, idx: torch.Tensor) -> torch.Tensor:
-        B, T = idx.shape
-        assert T == self.seq_len
-        pos = torch.arange(T, device=idx.device).unsqueeze(0).expand(B, T)
-        e   = self.tok_emb(idx) + self.pos_emb(pos)
+    def forward(self, x_in: torch.Tensor) -> torch.Tensor:
+        """x_in: [B, T, inp_dim] → [B, T, out_dim]"""
+        B, T, _ = x_in.shape
+        assert T == self.seq_len, f"seq_len mismatch: expected {self.seq_len}, got {T}"
+        pos = torch.arange(T, device=x_in.device).unsqueeze(0).expand(B, T)
+        e   = self.inp_emb(x_in) + self.pos_emb(pos)
         return self.forward_from_embeddings(e)
+
+
+# -----------------------
+# Teacher: 4-layer MLP (architecturally mismatched with Transformer students)
+# -----------------------
+
+class TeacherMLP(nn.Module):
+    """
+    4-layer MLP: R^{SEQ_LEN} → R^{256} → R^{256} → R^{256} → R^{TEACHER_OUT}.
+    Processes ALL 80 input values SIMULTANEOUSLY (not through attention).
+    Random Kaiming init (default PyTorch), ALL parameters frozen.
+
+    Why MLP teacher instead of TinyGPT teacher:
+      A 2-layer TinyGPT teacher (d_model=64) achieves near-trivial student MSE:
+      even the narrowest student (d_model=80) achieves MSE ≈ 1e-4 because
+      d_model=80 >> teacher_out=64 → student can freely represent all features.
+
+    Architectural mismatch: MLP sees ALL 80 tokens simultaneously as a flat
+    vector; Transformer students process them through d_model-dimensional
+    representations. Wide student (d_model=160) has more "channels" per token
+    → richer local+global representation → better approximation → lower MSE.
+    Narrow student (d_model=80) → tight bottleneck → higher MSE.
+    The mismatch ensures partial-fit regime for all shapes.
+    """
+    def __init__(
+        self,
+        *,
+        in_dim: int = SEQ_LEN,
+        hidden: int = 256,
+        out_dim: int = TEACHER_OUT,
+    ):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden, bias=True), nn.GELU(),
+            nn.Linear(hidden, hidden, bias=True), nn.GELU(),
+            nn.Linear(hidden, hidden, bias=True), nn.GELU(),
+            nn.Linear(hidden, out_dim, bias=True),
+        )
+        for p in self.parameters():
+            p.requires_grad_(False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """x: [B, SEQ_LEN, 1] → flatten → [B, SEQ_LEN] → [B, TEACHER_OUT]"""
+        B = x.shape[0]
+        return self.net(x.view(B, -1))   # [B, TEACHER_OUT]
+
+
+def build_teacher(*, seed: int, device: torch.device) -> TeacherMLP:
+    set_global_seed(seed)
+    teacher = TeacherMLP()
+    teacher.eval()
+    teacher.to(device)
+    print(f"Teacher params (frozen): {count_params(teacher):,}")
+    return teacher
+
+
+@torch.no_grad()
+def precompute_teacher_outputs(
+    teacher: TeacherMLP,
+    x: torch.Tensor,
+    device: torch.device,
+    batch_size: int = 512,
+) -> torch.Tensor:
+    """Run teacher in batches and return [N, TEACHER_OUT] targets."""
+    out_list = []
+    for i in range(0, len(x), batch_size):
+        xb = x[i: i + batch_size].to(device)
+        yb = teacher(xb)   # [B, TEACHER_OUT]
+        out_list.append(yb.cpu())
+    return torch.cat(out_list, dim=0)   # [N, TEACHER_OUT]
+
+
+def make_dataset(
+    n: int, seed: int, teacher: TeacherMLP, device: torch.device,
+    *,
+    y_scale: Optional[float] = None,
+) -> Tuple[torch.utils.data.TensorDataset, float]:
+    """
+    Generate n random N(0,1) scalar sequences [n, SEQ_LEN, 1] and
+    pre-compute the frozen teacher's last-position outputs [n, TEACHER_OUT].
+
+    Outputs are NORMALISED to unit std so the baseline MSE ≈ 1.0 regardless
+    of the teacher's weight scale. Pass y_scale from the training set to
+    val/test so all splits use identical normalisation.
+
+    Returns: (TensorDataset, y_scale)
+    """
+    rng  = np.random.default_rng(int(seed))
+    x_np = rng.standard_normal((n, SEQ_LEN, INP_DIM)).astype(np.float32)
+    x_t  = torch.from_numpy(x_np)
+    y_t  = precompute_teacher_outputs(teacher, x_t, device, batch_size=512)
+    if y_scale is None:
+        y_scale = float(y_t.std().item())
+        if y_scale < 1e-8:
+            y_scale = 1.0
+    y_t = y_t / y_scale
+    return torch.utils.data.TensorDataset(x_t, y_t), y_scale
 
 
 # -----------------------
@@ -359,47 +379,34 @@ class TinyGPT(nn.Module):
 
 def estimate_agop_wrt_embeddings(
     model: TinyGPT,
-    idx: torch.Tensor,
+    x_in: torch.Tensor,
     *,
-    proj_samples: int = 64,
-    max_agop_dim: int = 2048,
+    proj_samples: int = 128,
+    max_agop_dim: int = 4096,
 ) -> torch.Tensor:
     """
-    AGOP = E_data[J J^T]  where J = d(last_answer_logit)/d(e_flat).
-    last_answer_logit ∈ R^V  →  AGOP ∈ R^{V × V}  (fixed across all shapes).
+    AGOP = E_data[J J^T],  J = d(ŷ ∈ R^{64})/d(e_flat ∈ R^{T×d_model}).
+    ŷ = model output at LAST position (pos -1).
+    AGOP ∈ R^{64×64} — fixed across all (depth, d_model) shapes.
 
-    We use the second-to-last position logit (index T-2), which in the
-    AssociativeRecallDataset corresponds to predicting the 8th answer a7 from
-    context including the full key-value dictionary + all previous qa pairs.
-    This is the highest-information retrieval position and makes the gradient
-    flow through the model's full cross-positional attention machinery.
-
-    Estimation quality:
-      With B=256, proj_samples=64: 256×64=16384 rank-1 outer products
-      for V×(V+1)/2 = 32×33/2 = 528 unique AGOP entries → ~31× overdetermined.
-      (cf. T*V=1024-dim AGOP with 32 proj → 0.03× underdetermined — unusable.)
+    Estimated via JVP with random Gaussian perturbations (forward-mode AD).
     """
-    device = idx.device
+    device = x_in.device
     model.eval()
-    B, T = idx.shape
-    assert T == model.seq_len
-    V     = model.vocab_size
-    D_out = V   # last-answer logits only (not T*V)
 
-    if D_out > max_agop_dim:
-        raise ValueError(
-            f"AGOP dim V={D_out} > max_agop_dim={max_agop_dim}."
-        )
+    D_out = model.out_dim   # 64
+    assert D_out <= max_agop_dim
 
     with torch.no_grad():
+        B, T, _ = x_in.shape
         pos = torch.arange(T, device=device).unsqueeze(0).expand(B, T)
-        e   = (model.tok_emb(idx) + model.pos_emb(pos)).detach()
+        e   = (model.inp_emb(x_in) + model.pos_emb(pos)).detach()
 
     agop = torch.zeros((D_out, D_out), device=device, dtype=torch.float32)
 
     def fwd(e_in: torch.Tensor) -> torch.Tensor:
-        logits = model.forward_from_embeddings(e_in)  # [B, T, V]
-        return logits[:, -2, :]                        # [B, V] — last answer position
+        out = model.forward_from_embeddings(e_in)   # [B, T, D_out]
+        return out[:, -1, :]                         # [B, D_out] — last position
 
     for _ in range(int(proj_samples)):
         u = torch.randn_like(e)
@@ -419,31 +426,29 @@ def estimate_agop_wrt_embeddings(
 @dataclass
 class TrainCfg:
     lr: float = 3e-4
-    weight_decay: float = 0.0
+    weight_decay: float = 1e-4
     steps: int = 0
     data_ratio: float = 20.0
-    warmup_steps: int = 1000
+    warmup_steps: int = 300
     batch_size: int = 128
     grad_clip: float = 1.0
-    eval_every: int = 1000
+    eval_every: int = 250
 
-    vocab_size: int = 16   # keys 0-7, values 8-15
-    seq_len: int = 32      # input/target length (AssociativeRecall: 33-token seq → x/y of 32)
     train_size: int = 0
-    val_size: int = 5000
-    test_size: int = 5000
+    val_size:   int = 3000
+    test_size:  int = 3000
 
     target_params: int = 1_000_000
     depth_list: List[int] = None
     head_dim: int = 8
     dropout: float = 0.0
-    max_padding_ratio: float = 0.15
+    max_padding_ratio: float = 0.20
     max_train_factor: float = 3.0
     fit_patience: int = 8
 
     agop_batch: int = 256
-    agop_proj_samples: int = 64   # 64 proj × 256 batch = 16384 rank-1 for 32×32 AGOP → 31×
-    max_agop_dim: int = 2048
+    agop_proj_samples: int = 128
+    max_agop_dim: int = 4096
 
     seed: int = 0
 
@@ -456,27 +461,25 @@ def cosine_lr(step: int, base_lr: float, warmup: int, total: int) -> float:
 
 
 @torch.no_grad()
-def evaluate_lm(
+def evaluate_ts(
     model: TinyGPT,
     loader: torch.utils.data.DataLoader,
     device: torch.device,
-    answer_pos: torch.Tensor,
     max_batches: Optional[int] = None,
 ) -> float:
-    """Returns average NLL on answer positions only."""
+    """Average per-element MSE against teacher targets."""
     model.eval()
-    total_loss   = 0.0
-    total_tokens = 0
+    total_loss    = 0.0
+    total_samples = 0
     for i, (x, y) in enumerate(loader):
         if max_batches is not None and i >= max_batches:
             break
-        x = x.to(device)
-        y = y.to(device)
-        logits = model(x)
-        loss   = masked_answer_nll(logits, y, answer_pos, reduction="sum")
-        total_loss   += float(loss.item())
-        total_tokens += int(y.shape[0] * answer_pos.numel())
-    return total_loss / max(1, total_tokens)
+        x, y  = x.to(device), y.to(device)
+        pred  = model(x)[:, -1, :]                    # [B, TEACHER_OUT]
+        loss  = F.mse_loss(pred, y, reduction="sum")
+        total_loss    += float(loss.item())
+        total_samples += int(y.numel())
+    return total_loss / max(1, total_samples)
 
 
 def train_one_model(
@@ -488,8 +491,8 @@ def train_one_model(
     device: torch.device,
 ) -> Tuple[Dict[str, float], List[Dict[str, float]]]:
     """
-    Train until answer-only validation NLL plateaus after the D≈20N budget is reached.
-    Report the best validation-state checkpoint to stay in a fitted regime.
+    Train on teacher-student MSE until val_mse plateaus after D=20N budget.
+    Checkpoint best val_mse state to stay in fitted regime.
     """
     model.to(device)
     model.train()
@@ -501,8 +504,7 @@ def train_one_model(
     history: List[Dict[str, float]] = []
     min_steps = int(cfg.steps)
     max_steps = max(min_steps, int(math.ceil(cfg.max_train_factor * cfg.steps)))
-    ans_pos = answer_positions(cfg.seq_len)
-    best_val = float("inf")
+    best_val  = float("inf")
     best_state = None
     stale_evals = 0
 
@@ -513,65 +515,64 @@ def train_one_model(
             train_iter = iter(train_loader)
             x, y = next(train_iter)
 
-        x = x.to(device)
-        y = y.to(device)
+        x, y = x.to(device), y.to(device)
 
         lr = cosine_lr(step, cfg.lr, cfg.warmup_steps, max_steps)
         for pg in opt.param_groups:
             pg["lr"] = lr
 
-        logits = model(x)
-        loss   = masked_answer_nll(logits, y, ans_pos, reduction="mean")
+        pred = model(x)[:, -1, :]          # [B, TEACHER_OUT]
+        loss = F.mse_loss(pred, y)
 
         opt.zero_grad(set_to_none=True)
         loss.backward()
-        if cfg.grad_clip is not None and cfg.grad_clip > 0:
+        if cfg.grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
         opt.step()
 
         if (step + 1) % int(cfg.eval_every) == 0 or (step + 1) == max_steps:
-            train_nll = evaluate_lm(model, train_loader, device, ans_pos, max_batches=50)
-            val_nll   = evaluate_lm(model, val_loader,   device, ans_pos, max_batches=None)
-            test_nll  = evaluate_lm(model, test_loader,  device, ans_pos, max_batches=None)
+            train_mse = evaluate_ts(model, train_loader, device, max_batches=30)
+            val_mse   = evaluate_ts(model, val_loader,   device)
+            test_mse  = evaluate_ts(model, test_loader,  device)
             history.append({
                 "step":      int(step + 1),
                 "lr":        float(lr),
-                "train_nll": float(train_nll),
-                "val_nll":   float(val_nll),
-                "test_nll":  float(test_nll),
+                "train_mse": float(train_mse),
+                "val_mse":   float(val_mse),
+                "test_mse":  float(test_mse),
             })
             dt  = time.time() - t0
-            gap = test_nll - train_nll
+            gap = val_mse - train_mse
             print(
                 f"step {step+1:6d}/{max_steps}  lr={lr:.3e}  "
-                f"train_nll={train_nll:.4f}  val_nll={val_nll:.4f}  test_nll={test_nll:.4f}  "
-                f"ppl={math.exp(test_nll):.2f}  gap={gap:+.4f}  time={dt:.1f}s"
+                f"train_mse={train_mse:.5f}  val_mse={val_mse:.5f}  "
+                f"test_mse={test_mse:.5f}  gap={gap:+.5f}  time={dt:.1f}s"
             )
-            if val_nll + 1e-6 < best_val:
-                best_val = float(val_nll)
+            if val_mse + 1e-8 < best_val:
+                best_val    = float(val_mse)
                 stale_evals = 0
-                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+                best_state  = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             else:
                 stale_evals += 1
             if (step + 1) >= min_steps and stale_evals >= int(cfg.fit_patience):
                 break
+            model.train()
 
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    train_nll = evaluate_lm(model, train_loader, device, ans_pos, max_batches=None)
-    val_nll   = evaluate_lm(model, val_loader,   device, ans_pos, max_batches=None)
-    test_nll  = evaluate_lm(model, test_loader,  device, ans_pos, max_batches=None)
+    train_mse = evaluate_ts(model, train_loader, device)
+    val_mse   = evaluate_ts(model, val_loader,   device)
+    test_mse  = evaluate_ts(model, test_loader,  device)
 
-    gap = test_nll - train_nll
-    if gap > 1.0:
-        print(f"  [WARNING] test_nll - train_nll = {gap:.4f} (>1.0 nats), possible overfitting")
+    gap = val_mse - train_mse
+    if gap > 0.5:
+        print(f"  [WARNING] val_mse - train_mse = {gap:.5f} (>0.5), possible overfitting")
 
     return {
-        "train_nll": float(train_nll),
-        "val_nll":   float(val_nll),
-        "test_nll":  float(test_nll),
-        "test_ppl":  float(math.exp(test_nll)),
+        "train_mse": float(train_mse),
+        "val_mse":   float(val_mse),
+        "test_mse":  float(test_mse),
         "steps_run": int(history[-1]["step"]) if history else 0,
     }, history
 
@@ -580,7 +581,7 @@ def train_one_model(
 # Shape/parameter matching
 # -----------------------
 
-def build_transformer_model(
+def build_student_model(
     *,
     depth: int,
     d_model: int,
@@ -589,26 +590,32 @@ def build_transformer_model(
     cfg: TrainCfg,
     pad_to_target: bool = True,
 ) -> TinyGPT:
-    tmp    = TinyGPT(vocab_size=cfg.vocab_size, seq_len=cfg.seq_len, depth=depth,
-                     d_model=d_model, n_heads=n_heads, d_ff=d_ff, dropout=cfg.dropout,
-                     pad_params=0, tie_weights=True)
+    tmp = TinyGPT(
+        inp_dim=INP_DIM, out_dim=TEACHER_OUT, seq_len=SEQ_LEN,
+        depth=depth, d_model=d_model, n_heads=n_heads, d_ff=d_ff,
+        dropout=cfg.dropout, pad_params=0,
+    )
     active = count_params(tmp)
     pad    = 0
     if pad_to_target:
         if active > cfg.target_params:
-            raise ValueError(f"Active params {active} > target {cfg.target_params} "
-                             f"for depth={depth}, d_model={d_model}.")
+            raise ValueError(
+                f"Active params {active} > target {cfg.target_params} "
+                f"for depth={depth}, d_model={d_model}."
+            )
         pad = int(cfg.target_params - active)
-    return TinyGPT(vocab_size=cfg.vocab_size, seq_len=cfg.seq_len, depth=depth,
-                   d_model=d_model, n_heads=n_heads, d_ff=d_ff, dropout=cfg.dropout,
-                   pad_params=pad, tie_weights=True)
+    return TinyGPT(
+        inp_dim=INP_DIM, out_dim=TEACHER_OUT, seq_len=SEQ_LEN,
+        depth=depth, d_model=d_model, n_heads=n_heads, d_ff=d_ff,
+        dropout=cfg.dropout, pad_params=pad,
+    )
 
 
 def find_d_model_for_target_params(
     *,
     depth: int,
     cfg: TrainCfg,
-    d_model_min: int = 64,
+    d_model_min: int = 48,
     d_model_max: int = 512,
 ) -> Tuple[int, int, int, int]:
     """Returns (d_model, n_heads, d_ff, active_params)."""
@@ -623,13 +630,18 @@ def find_d_model_for_target_params(
     def active_params(d_model: int) -> int:
         n_heads = max(1, d_model // hd)
         d_ff    = 4 * d_model
-        m = TinyGPT(vocab_size=cfg.vocab_size, seq_len=cfg.seq_len, depth=depth,
-                    d_model=d_model, n_heads=n_heads, d_ff=d_ff, dropout=cfg.dropout,
-                    pad_params=0, tie_weights=True)
+        m = TinyGPT(
+            inp_dim=INP_DIM, out_dim=TEACHER_OUT, seq_len=SEQ_LEN,
+            depth=depth, d_model=d_model, n_heads=n_heads, d_ff=d_ff,
+            dropout=cfg.dropout, pad_params=0,
+        )
         return count_params(m)
 
     if active_params(d_model_min) > cfg.target_params:
-        raise ValueError(f"d_model={d_model_min} already exceeds target_params={cfg.target_params} at depth={depth}.")
+        raise ValueError(
+            f"d_model={d_model_min} already exceeds target_params={cfg.target_params} "
+            f"at depth={depth}."
+        )
     if active_params(d_model_max) <= cfg.target_params:
         d = d_model_max
         return d, max(1, d // hd), 4 * d, active_params(d)
@@ -662,7 +674,6 @@ def find_d_model_for_target_params(
 # -----------------------
 
 def scatter_plot(x, y, xlabel, ylabel, title, outpath, depths=None, r=None, r_label="Pearson r"):
-    """Linear-scale scatter plot (no log on y-axis, per AOFE hypothesis requirements)."""
     fig, ax = plt.subplots(figsize=(6, 5))
     ax.scatter(x, y)
     if depths is not None:
@@ -682,7 +693,6 @@ def scatter_plot(x, y, xlabel, ylabel, title, outpath, depths=None, r=None, r_la
 
 
 def save_curve(history: List[Dict[str, float]], out_dir: str, stem: str) -> None:
-    """Save per-shape training curve (linear NLL scale for transformer)."""
     os.makedirs(out_dir, exist_ok=True)
     csv_path = os.path.join(out_dir, f"{stem}.csv")
     png_path = os.path.join(out_dir, f"{stem}.png")
@@ -692,15 +702,15 @@ def save_curve(history: List[Dict[str, float]], out_dir: str, stem: str) -> None
         writer.writerows(history)
 
     steps      = [row["step"]      for row in history]
-    train_vals = [row["train_nll"] for row in history]
-    val_vals   = [row["val_nll"]   for row in history]
-    test_vals  = [row["test_nll"]  for row in history]
+    train_vals = [row["train_mse"] for row in history]
+    val_vals   = [row["val_mse"]   for row in history]
+    test_vals  = [row["test_mse"]  for row in history]
     plt.figure(figsize=(6, 4))
-    plt.plot(steps, train_vals, label="train_nll")
-    plt.plot(steps, val_vals,   label="val_nll")
-    plt.plot(steps, test_vals,  label="test_nll")
+    plt.plot(steps, train_vals, label="train_mse")
+    plt.plot(steps, val_vals,   label="val_mse")
+    plt.plot(steps, test_vals,  label="test_mse")
     plt.xlabel("step")
-    plt.ylabel("NLL (nats/token)")
+    plt.ylabel("MSE (teacher-student)")
     plt.title(stem)
     plt.legend()
     plt.tight_layout()
@@ -723,27 +733,23 @@ def main():
     parser.add_argument("--head_dim",      type=int, default=8)
     parser.add_argument("--dropout",       type=float, default=0.0)
 
-    parser.add_argument("--vocab_size",   type=int, default=16,
-                        help="Vocabulary size for associative recall.")
-    parser.add_argument("--seq_len",      type=int, default=32)
-    parser.add_argument("--train_size",   type=int, default=0)
-    parser.add_argument("--val_size",     type=int, default=5000)
-    parser.add_argument("--test_size",    type=int, default=5000)
+    parser.add_argument("--train_size",    type=int, default=0)
+    parser.add_argument("--val_size",      type=int, default=3000)
+    parser.add_argument("--test_size",     type=int, default=3000)
 
     parser.add_argument("--batch_size",   type=int,   default=128)
-    parser.add_argument("--steps",        type=int,   default=0,
-                        help="0 = auto-compute from D=data_ratio×N.")
+    parser.add_argument("--steps",        type=int,   default=0)
     parser.add_argument("--data_ratio",   type=float, default=20.0)
     parser.add_argument("--lr",           type=float, default=3e-4)
-    parser.add_argument("--weight_decay", type=float, default=0.0)
-    parser.add_argument("--warmup_steps", type=int,   default=1000)
-    parser.add_argument("--eval_every",   type=int,   default=1000)
+    parser.add_argument("--weight_decay", type=float, default=1e-4)
+    parser.add_argument("--warmup_steps", type=int,   default=300)
+    parser.add_argument("--eval_every",   type=int,   default=250)
     parser.add_argument("--grad_clip",    type=float, default=1.0)
 
     parser.add_argument("--agop_batch",        type=int, default=256)
-    parser.add_argument("--agop_proj_samples", type=int, default=64)
-    parser.add_argument("--max_agop_dim",      type=int, default=2048)
-    parser.add_argument("--max_padding_ratio", type=float, default=0.15)
+    parser.add_argument("--agop_proj_samples", type=int, default=128)
+    parser.add_argument("--max_agop_dim",      type=int, default=4096)
+    parser.add_argument("--max_padding_ratio", type=float, default=0.20)
     parser.add_argument("--max_train_factor",  type=float, default=3.0)
     parser.add_argument("--fit_patience",      type=int,   default=8)
 
@@ -757,22 +763,23 @@ def main():
     if len(depths) != 10:
         raise ValueError(f"depth_list must contain exactly 10 shapes, got {len(depths)}.")
 
-    # Auto train_size and steps from D=data_ratio×N
-    supervised_tokens_per_sample = int(answer_positions(args.seq_len).numel())
+    # supervised_per_sample = TEACHER_OUT = 64 output dimensions per sequence
+    supervised_per_sample = TEACHER_OUT
     if args.train_size <= 0:
-        args.train_size = int(math.ceil(args.data_ratio * args.target_params / float(supervised_tokens_per_sample)))
+        args.train_size = int(math.ceil(
+            args.data_ratio * args.target_params / float(supervised_per_sample)
+        ))
     if args.steps <= 0:
         args.steps = int(math.ceil(
-            args.data_ratio * args.target_params / float(args.batch_size * supervised_tokens_per_sample)
+            args.data_ratio * args.target_params
+            / float(args.batch_size * supervised_per_sample)
         ))
 
     cfg = TrainCfg(
         lr=args.lr, weight_decay=args.weight_decay, steps=args.steps,
         data_ratio=args.data_ratio, warmup_steps=args.warmup_steps,
         batch_size=args.batch_size, eval_every=args.eval_every, grad_clip=args.grad_clip,
-        vocab_size=args.vocab_size, seq_len=args.seq_len, train_size=args.train_size,
-        val_size=args.val_size,
-        test_size=args.test_size,
+        train_size=args.train_size, val_size=args.val_size, test_size=args.test_size,
         target_params=args.target_params, depth_list=depths, head_dim=args.head_dim,
         dropout=args.dropout, agop_batch=args.agop_batch,
         agop_proj_samples=args.agop_proj_samples, max_agop_dim=args.max_agop_dim,
@@ -782,70 +789,70 @@ def main():
         seed=args.seed,
     )
 
-    # AGOP dim = V (last-answer logit only), not T*V
-    agop_out_dim = cfg.vocab_size
-    if agop_out_dim > cfg.max_agop_dim:
-        raise ValueError(
-            f"AGOP dim V={agop_out_dim} > max_agop_dim={cfg.max_agop_dim}."
-        )
+    total_train_tokens = cfg.steps * cfg.batch_size * supervised_per_sample
+    unique_tokens      = cfg.train_size * supervised_per_sample
+    approx_epochs      = cfg.steps * cfg.batch_size / max(1, cfg.train_size)
 
-    total_train_tokens = cfg.steps * cfg.batch_size * supervised_tokens_per_sample
-    unique_tokens      = cfg.train_size * supervised_tokens_per_sample
-    approx_epochs      = cfg.steps * cfg.batch_size / cfg.train_size
-
-    print("========== Budget (Transformer / AssociativeRecall) ==========")
+    print("========== Budget (Transformer / Teacher-Student) ==========")
     print(f"target_params N     = {cfg.target_params:,}")
-    print(f"AGOP output dim     = V = {agop_out_dim}×{agop_out_dim}  "
-          f"(last-answer logit; prev T*V={cfg.seq_len * cfg.vocab_size})")
+    print(f"Teacher: 2-layer TinyGPT, d_model=64, n_heads=8 (frozen)")
+    print(f"TEACHER_OUT         = {TEACHER_OUT}  (regression target dimension)")
+    print(f"seq_len             = {SEQ_LEN}  (random N(0,1) scalar tokens)")
+    print(f"inp_dim             = {INP_DIM}  (1D scalar per token)")
+    print(f"AGOP output dim     = {TEACHER_OUT}×{TEACHER_OUT}  "
+          f"({TEACHER_OUT*(TEACHER_OUT-1)//2} unique off-diag entries)")
     print(f"proj_samples        = {cfg.agop_proj_samples}  "
-          f"(→ {cfg.agop_proj_samples * cfg.agop_batch} rank-1 updates for "
-          f"{agop_out_dim*(agop_out_dim+1)//2} entries)")
+          f"(→ {cfg.agop_proj_samples*cfg.agop_batch} rank-1 updates)")
     print(f"train_size          = {cfg.train_size:,}  unique random sequences")
-    print(f"supervised positions= {supervised_tokens_per_sample} answer tokens / sequence")
-    print(f"approx epochs       = {approx_epochs:.2f}  (≈ 1 pass per unique sample)")
+    print(f"approx epochs       = {approx_epochs:.2f}")
     print(f"base steps          = {cfg.steps:,}")
     print(f"D (total tokens)    = {total_train_tokens:,}   D/N = {total_train_tokens/cfg.target_params:.1f}×")
     print(f"unique tokens       = {unique_tokens:,}   {unique_tokens/cfg.target_params:.1f}×N")
-    print("==============================================================")
+    print("=============================================================")
 
-    train_ds = AssociativeRecallDataset(size=cfg.train_size, seed=cfg.seed + 1)
-    val_ds   = AssociativeRecallDataset(size=cfg.val_size,   seed=cfg.seed + 2)
-    test_ds  = AssociativeRecallDataset(size=cfg.test_size,  seed=cfg.seed + 3)
+    # Build teacher (same teacher for all student shapes)
+    teacher = build_teacher(seed=args.seed + 999, device=device)
+
+    print("\nPre-computing teacher outputs for train / val / test ...")
+    t_pre = time.time()
+    train_ds, y_scale = make_dataset(cfg.train_size, seed=args.seed + 1, teacher=teacher, device=device)
+    val_ds,   _       = make_dataset(cfg.val_size,   seed=args.seed + 2, teacher=teacher, device=device, y_scale=y_scale)
+    test_ds,  _       = make_dataset(cfg.test_size,  seed=args.seed + 3, teacher=teacher, device=device, y_scale=y_scale)
+    print(f"  done in {time.time()-t_pre:.1f}s  (teacher output y_scale={y_scale:.4f})")
 
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=cfg.batch_size, shuffle=True, drop_last=True)
+        train_ds, batch_size=cfg.batch_size, shuffle=True,  drop_last=True)
     val_loader   = torch.utils.data.DataLoader(
         val_ds,   batch_size=cfg.batch_size, shuffle=False, drop_last=False)
     test_loader  = torch.utils.data.DataLoader(
         test_ds,  batch_size=cfg.batch_size, shuffle=False, drop_last=False)
 
     # Fixed AGOP batch from test set
-    x_agop_list = []
-    for x, _y in test_loader:
-        x_agop_list.append(x)
-        if sum(t.shape[0] for t in x_agop_list) >= cfg.agop_batch:
-            break
-    x_agop = torch.cat(x_agop_list, dim=0)[: cfg.agop_batch].to(device)
+    x_agop = test_ds.tensors[0][: cfg.agop_batch].to(device)   # [256, 80, 1]
 
     results: List[Dict[str, float]] = []
 
     for depth in cfg.depth_list:
         d_model, n_heads, d_ff, active = find_d_model_for_target_params(
-            depth=depth, cfg=cfg, d_model_min=64, d_model_max=512)
-        model = build_transformer_model(
+            depth=depth, cfg=cfg, d_model_min=48, d_model_max=512)
+        model = build_student_model(
             depth=depth, d_model=d_model, n_heads=n_heads, d_ff=d_ff, cfg=cfg)
         total = count_params(model)
         pad   = total - active
         pad_ratio = pad / max(1, total)
         if pad_ratio > cfg.max_padding_ratio:
-            print(f"  [SKIP] depth={depth}: padding_ratio={pad_ratio:.3f} exceeds max_padding_ratio={cfg.max_padding_ratio:.3f}")
+            print(f"  [SKIP] depth={depth}: padding_ratio={pad_ratio:.3f} "
+                  f"exceeds max_padding_ratio={cfg.max_padding_ratio:.3f}")
             continue
 
+        ratio = d_model / TEACHER_OUT
         print("\n" + "=" * 80)
         print(f"[Transformer] depth={depth:3d}  d_model={d_model:4d}  n_heads={n_heads:3d}  "
-              f"d_ff={d_ff:5d}  active={active:,}  pad={pad:,}  total={total:,}")
+              f"d_ff={d_ff:5d}  active={active:,}  pad={pad:,}  total={total:,}  "
+              f"d_model/TEACHER_OUT={ratio:.2f}")
         print("=" * 80)
 
+        set_global_seed(args.seed + depth)
         metrics, history = train_one_model(model, train_loader, val_loader, test_loader, cfg, device)
         save_curve(history, curve_dir, f"transformer_depth{depth}_dmodel{d_model}")
 
@@ -868,11 +875,16 @@ def main():
             "agop_offdiag_ratio":  float(off_r),
         })
         results.append(row)
+        print(f"  depth={depth}  test_mse={metrics['test_mse']:.5f}  "
+              f"AOFE={off_e:.4f}  AOFE_ratio={off_r:.4f}")
 
         del model, agop
         torch.cuda.empty_cache()
 
-    # ---------- Save results ----------
+    if not results:
+        print("[ERROR] No valid shapes found. Exiting.")
+        return
+
     csv_path = os.path.join(args.out_dir, "results.csv")
     npy_path = os.path.join(args.out_dir, "results.npy")
     with open(csv_path, "w", newline="") as f:
@@ -882,43 +894,39 @@ def main():
             w.writerow(r)
     np.save(npy_path, results, allow_pickle=True)
 
-    # ---------- Unified correlation metrics (no log) ----------
-    test_nll   = np.array([r["test_nll"]            for r in results])
-    off_energy = np.array([r["agop_offdiag_energy"]  for r in results])
-    off_ratio  = np.array([r["agop_offdiag_ratio"]   for r in results])
+    test_mse   = np.array([r["test_mse"]             for r in results])
+    off_energy = np.array([r["agop_offdiag_energy"]   for r in results])
+    off_ratio  = np.array([r["agop_offdiag_ratio"]    for r in results])
     depths_arr = [int(r["depth"]) for r in results]
 
-    p_aofe       = pearson_corr(off_energy, test_nll)
-    p_aofe_ratio = pearson_corr(off_ratio,  test_nll)
-    s_aofe       = spearman_corr(off_energy, test_nll)
-    s_aofe_ratio = spearman_corr(off_ratio,  test_nll)
+    p_aofe       = pearson_corr(off_energy, test_mse)
+    p_aofe_ratio = pearson_corr(off_ratio,  test_mse)
+    s_aofe       = spearman_corr(off_energy, test_mse)
+    s_aofe_ratio = spearman_corr(off_ratio,  test_mse)
 
     print("\n" + "-" * 80)
-    print("Unified AOFE metrics (raw test_nll, no log):")
-    print(f"  Pearson (AOFE=offdiag_energy,     test_nll) = {p_aofe:.4f}   Spearman = {s_aofe:.4f}")
-    print(f"  Pearson (AOFE_ratio=offdiag_ratio, test_nll) = {p_aofe_ratio:.4f}   Spearman = {s_aofe_ratio:.4f}")
+    print("Unified AOFE metrics (raw test_mse, no log):")
+    print(f"  Pearson (AOFE=offdiag_energy,     test_mse) = {p_aofe:.4f}   Spearman = {s_aofe:.4f}")
+    print(f"  Pearson (AOFE_ratio=offdiag_ratio, test_mse) = {p_aofe_ratio:.4f}   Spearman = {s_aofe_ratio:.4f}")
     print(f"Saved: {csv_path}")
     print(f"Saved: {npy_path}")
     print("-" * 80)
 
-    # ---------- Scatter plots (linear y-axis, with Pearson r annotation) ----------
     scatter_plot(
-        off_energy, test_nll,
+        off_energy, test_mse,
         xlabel="AOFE  (AGOP off-diagonal energy)",
-        ylabel="Test NLL (nats/token)",
-        title=f"Next-token: test NLL vs AOFE  [N={cfg.target_params}]",
-        outpath=os.path.join(args.out_dir, "scatter_testnll_vs_aofe_energy.png"),
-        depths=depths_arr,
-        r=p_aofe, r_label="Pearson r (AOFE, loss)",
+        ylabel="Test MSE (teacher-student)",
+        title=f"Teacher-Student Transformer: test MSE vs AOFE  [N={cfg.target_params}]",
+        outpath=os.path.join(args.out_dir, "scatter_testmse_vs_aofe_energy.png"),
+        depths=depths_arr, r=p_aofe, r_label="Pearson r (AOFE, loss)",
     )
     scatter_plot(
-        off_ratio, test_nll,
+        off_ratio, test_mse,
         xlabel="AOFE ratio  (AGOP off-diagonal ratio)",
-        ylabel="Test NLL (nats/token)",
-        title=f"Next-token: test NLL vs AOFE ratio  [N={cfg.target_params}]",
-        outpath=os.path.join(args.out_dir, "scatter_testnll_vs_aofe_ratio.png"),
-        depths=depths_arr,
-        r=p_aofe_ratio, r_label="Pearson r (AOFE_ratio, loss)",
+        ylabel="Test MSE (teacher-student)",
+        title=f"Teacher-Student Transformer: test MSE vs AOFE ratio  [N={cfg.target_params}]",
+        outpath=os.path.join(args.out_dir, "scatter_testmse_vs_aofe_ratio.png"),
+        depths=depths_arr, r=p_aofe_ratio, r_label="Pearson r (AOFE_ratio, loss)",
     )
 
 

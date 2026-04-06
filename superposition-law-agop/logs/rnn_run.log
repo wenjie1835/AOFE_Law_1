@@ -1,0 +1,376 @@
+========== Budget (RNN / Teacher-Student) ==========
+target_params N     = 1,000,000
+Teacher: 2-layer GRU, hidden=64 (frozen)
+TEACHER_OUT         = 64  (regression target dimension)
+seq_len             = 80  (random N(0,1) scalar steps)
+inp_dim             = 1  (1D scalar per step)
+AGOP output dim     = 64×64  (2016 unique off-diag entries)
+proj_samples        = 128
+train_size          = 312,500  unique random sequences
+approx epochs       = 1.00
+base steps          = 2,442
+D (total tokens)    = 20,004,864   D/N = 20.0×
+unique tokens       = 20,000,000   20.0×N
+=============================================================
+Teacher params (frozen): 168,768
+
+Pre-computing teacher outputs for train / val / test ...
+  done in 1.8s  (teacher output y_scale=0.0398)
+
+================================================================================
+[RNN] depth=  3  hidden=  248  active=943,704  pad=56,296  total=1,000,000  hidden/TEACHER_OUT=3.88
+================================================================================
+step    250/7326  lr=3.000e-04  train_mse=0.166317  val_mse=0.167601  test_mse=0.166264  rmse=0.409391  gap=+0.001284  time=7.6s
+step    500/7326  lr=2.987e-04  train_mse=0.163016  val_mse=0.161952  test_mse=0.161235  rmse=0.402432  gap=-0.001064  time=14.6s
+step    750/7326  lr=2.956e-04  train_mse=0.154687  val_mse=0.155333  test_mse=0.154420  rmse=0.394123  gap=+0.000646  time=21.6s
+step   1000/7326  lr=2.908e-04  train_mse=0.149179  val_mse=0.149828  test_mse=0.149025  rmse=0.387076  gap=+0.000649  time=28.9s
+step   1250/7326  lr=2.842e-04  train_mse=0.144267  val_mse=0.143017  test_mse=0.142790  rmse=0.378176  gap=-0.001249  time=36.1s
+step   1500/7326  lr=2.761e-04  train_mse=0.138106  val_mse=0.136792  test_mse=0.136620  rmse=0.369855  gap=-0.001314  time=43.1s
+step   1750/7326  lr=2.664e-04  train_mse=0.130861  val_mse=0.131456  test_mse=0.131403  rmse=0.362569  gap=+0.000596  time=50.1s
+step   2000/7326  lr=2.552e-04  train_mse=0.125732  val_mse=0.126243  test_mse=0.125988  rmse=0.355307  gap=+0.000511  time=56.3s
+step   2250/7326  lr=2.428e-04  train_mse=0.119779  val_mse=0.120905  test_mse=0.120490  rmse=0.347714  gap=+0.001126  time=62.3s
+step   2500/7326  lr=2.293e-04  train_mse=0.113338  val_mse=0.112657  test_mse=0.112225  rmse=0.335645  gap=-0.000680  time=69.0s
+step   2750/7326  lr=2.148e-04  train_mse=0.103488  val_mse=0.103298  test_mse=0.102764  rmse=0.321400  gap=-0.000191  time=74.4s
+step   3000/7326  lr=1.996e-04  train_mse=0.091214  val_mse=0.091311  test_mse=0.090666  rmse=0.302178  gap=+0.000098  time=79.9s
+step   3250/7326  lr=1.837e-04  train_mse=0.080545  val_mse=0.081525  test_mse=0.081159  rmse=0.285527  gap=+0.000980  time=86.8s
+step   3500/7326  lr=1.674e-04  train_mse=0.074174  val_mse=0.074310  test_mse=0.074098  rmse=0.272599  gap=+0.000136  time=93.8s
+step   3750/7326  lr=1.509e-04  train_mse=0.069358  val_mse=0.069135  test_mse=0.068714  rmse=0.262936  gap=-0.000223  time=100.9s
+step   4000/7326  lr=1.344e-04  train_mse=0.064516  val_mse=0.064564  test_mse=0.063967  rmse=0.254095  gap=+0.000049  time=107.9s
+step   4250/7326  lr=1.181e-04  train_mse=0.059644  val_mse=0.061520  test_mse=0.060965  rmse=0.248032  gap=+0.001876  time=115.2s
+step   4500/7326  lr=1.022e-04  train_mse=0.059112  val_mse=0.059882  test_mse=0.059354  rmse=0.244707  gap=+0.000769  time=122.4s
+step   4750/7326  lr=8.683e-05  train_mse=0.057263  val_mse=0.057212  test_mse=0.056666  rmse=0.239190  gap=-0.000051  time=129.5s
+step   5000/7326  lr=7.225e-05  train_mse=0.055018  val_mse=0.055783  test_mse=0.055066  rmse=0.236184  gap=+0.000765  time=136.6s
+step   5250/7326  lr=5.861e-05  train_mse=0.054325  val_mse=0.054318  test_mse=0.053742  rmse=0.233062  gap=-0.000007  time=143.6s
+step   5500/7326  lr=4.608e-05  train_mse=0.052841  val_mse=0.053573  test_mse=0.052894  rmse=0.231459  gap=+0.000732  time=150.4s
+step   5750/7326  lr=3.482e-05  train_mse=0.052841  val_mse=0.052833  test_mse=0.052190  rmse=0.229854  gap=-0.000008  time=156.5s
+step   6000/7326  lr=2.495e-05  train_mse=0.051677  val_mse=0.052289  test_mse=0.051645  rmse=0.228668  gap=+0.000613  time=163.8s
+step   6250/7326  lr=1.659e-05  train_mse=0.051365  val_mse=0.051988  test_mse=0.051382  rmse=0.228008  gap=+0.000623  time=171.1s
+step   6500/7326  lr=9.860e-06  train_mse=0.050809  val_mse=0.051685  test_mse=0.051044  rmse=0.227344  gap=+0.000877  time=178.3s
+step   6750/7326  lr=4.827e-06  train_mse=0.050880  val_mse=0.051516  test_mse=0.050925  rmse=0.226972  gap=+0.000636  time=185.4s
+step   7000/7326  lr=1.556e-06  train_mse=0.050604  val_mse=0.051422  test_mse=0.050813  rmse=0.226764  gap=+0.000818  time=192.3s
+step   7250/7326  lr=8.642e-08  train_mse=0.050792  val_mse=0.051396  test_mse=0.050794  rmse=0.226707  gap=+0.000604  time=199.5s
+step   7326/7326  lr=1.458e-11  train_mse=0.050731  val_mse=0.051395  test_mse=0.050794  rmse=0.226705  gap=+0.000664  time=202.3s
+  depth=3  test_mse=0.050794  AOFE=1.6268  AOFE_ratio=0.6460
+
+================================================================================
+[RNN] depth=  4  hidden=  216  active=999,496  pad=504  total=1,000,000  hidden/TEACHER_OUT=3.38
+================================================================================
+step    250/7326  lr=3.000e-04  train_mse=0.167906  val_mse=0.167579  test_mse=0.166242  rmse=0.409364  gap=-0.000327  time=8.7s
+step    500/7326  lr=2.987e-04  train_mse=0.161770  val_mse=0.162412  test_mse=0.161641  rmse=0.403003  gap=+0.000641  time=17.6s
+step    750/7326  lr=2.956e-04  train_mse=0.157483  val_mse=0.156768  test_mse=0.156279  rmse=0.395939  gap=-0.000715  time=25.4s
+step   1000/7326  lr=2.908e-04  train_mse=0.151568  val_mse=0.151567  test_mse=0.150618  rmse=0.389316  gap=-0.000001  time=33.7s
+step   1250/7326  lr=2.842e-04  train_mse=0.145219  val_mse=0.145704  test_mse=0.144865  rmse=0.381712  gap=+0.000485  time=42.1s
+step   1500/7326  lr=2.761e-04  train_mse=0.140006  val_mse=0.142176  test_mse=0.141321  rmse=0.377062  gap=+0.002170  time=50.0s
+step   1750/7326  lr=2.664e-04  train_mse=0.136429  val_mse=0.135562  test_mse=0.135321  rmse=0.368187  gap=-0.000867  time=58.9s
+step   2000/7326  lr=2.552e-04  train_mse=0.128735  val_mse=0.129394  test_mse=0.129414  rmse=0.359714  gap=+0.000659  time=68.2s
+step   2250/7326  lr=2.428e-04  train_mse=0.124112  val_mse=0.123118  test_mse=0.123211  rmse=0.350882  gap=-0.000993  time=76.5s
+step   2500/7326  lr=2.293e-04  train_mse=0.116167  val_mse=0.115814  test_mse=0.115844  rmse=0.340314  gap=-0.000353  time=84.8s
+step   2750/7326  lr=2.148e-04  train_mse=0.108990  val_mse=0.108632  test_mse=0.108169  rmse=0.329594  gap=-0.000359  time=93.1s
+step   3000/7326  lr=1.996e-04  train_mse=0.102221  val_mse=0.102374  test_mse=0.101432  rmse=0.319959  gap=+0.000153  time=101.5s
+step   3250/7326  lr=1.837e-04  train_mse=0.093948  val_mse=0.095703  test_mse=0.094758  rmse=0.309360  gap=+0.001755  time=109.9s
+step   3500/7326  lr=1.674e-04  train_mse=0.089350  val_mse=0.090218  test_mse=0.089476  rmse=0.300363  gap=+0.000868  time=118.4s
+step   3750/7326  lr=1.509e-04  train_mse=0.084110  val_mse=0.084523  test_mse=0.083968  rmse=0.290729  gap=+0.000413  time=127.0s
+step   4000/7326  lr=1.344e-04  train_mse=0.078870  val_mse=0.079632  test_mse=0.079123  rmse=0.282191  gap=+0.000762  time=135.5s
+step   4250/7326  lr=1.181e-04  train_mse=0.072510  val_mse=0.072804  test_mse=0.072319  rmse=0.269823  gap=+0.000294  time=144.0s
+step   4500/7326  lr=1.022e-04  train_mse=0.069627  val_mse=0.069507  test_mse=0.068936  rmse=0.263642  gap=-0.000120  time=152.2s
+step   4750/7326  lr=8.683e-05  train_mse=0.066574  val_mse=0.066681  test_mse=0.066284  rmse=0.258226  gap=+0.000107  time=159.9s
+step   5000/7326  lr=7.225e-05  train_mse=0.063751  val_mse=0.064594  test_mse=0.064425  rmse=0.254153  gap=+0.000843  time=168.6s
+step   5250/7326  lr=5.861e-05  train_mse=0.062561  val_mse=0.062952  test_mse=0.062515  rmse=0.250903  gap=+0.000391  time=177.2s
+step   5500/7326  lr=4.608e-05  train_mse=0.061064  val_mse=0.061505  test_mse=0.061103  rmse=0.248002  gap=+0.000441  time=186.1s
+step   5750/7326  lr=3.482e-05  train_mse=0.060591  val_mse=0.060980  test_mse=0.060515  rmse=0.246942  gap=+0.000389  time=194.4s
+step   6000/7326  lr=2.495e-05  train_mse=0.060141  val_mse=0.060065  test_mse=0.059694  rmse=0.245082  gap=-0.000076  time=202.8s
+step   6250/7326  lr=1.659e-05  train_mse=0.058570  val_mse=0.059502  test_mse=0.059120  rmse=0.243931  gap=+0.000932  time=211.3s
+step   6500/7326  lr=9.860e-06  train_mse=0.059290  val_mse=0.059234  test_mse=0.058810  rmse=0.243380  gap=-0.000056  time=219.9s
+step   6750/7326  lr=4.827e-06  train_mse=0.058483  val_mse=0.059072  test_mse=0.058634  rmse=0.243047  gap=+0.000589  time=228.5s
+step   7000/7326  lr=1.556e-06  train_mse=0.059059  val_mse=0.058935  test_mse=0.058510  rmse=0.242765  gap=-0.000124  time=237.2s
+step   7250/7326  lr=8.642e-08  train_mse=0.058171  val_mse=0.058915  test_mse=0.058479  rmse=0.242724  gap=+0.000744  time=243.2s
+step   7326/7326  lr=1.458e-11  train_mse=0.059111  val_mse=0.058914  test_mse=0.058478  rmse=0.242722  gap=-0.000197  time=245.8s
+  depth=4  test_mse=0.058478  AOFE=1.5636  AOFE_ratio=0.6699
+
+================================================================================
+[RNN] depth=  5  hidden=  184  active=932,024  pad=67,976  total=1,000,000  hidden/TEACHER_OUT=2.88
+================================================================================
+step    250/7326  lr=3.000e-04  train_mse=0.168385  val_mse=0.168083  test_mse=0.166592  rmse=0.409979  gap=-0.000302  time=38.2s
+step    500/7326  lr=2.987e-04  train_mse=0.164137  val_mse=0.164319  test_mse=0.163330  rmse=0.405363  gap=+0.000182  time=78.6s
+step    750/7326  lr=2.956e-04  train_mse=0.160754  val_mse=0.159651  test_mse=0.158689  rmse=0.399564  gap=-0.001103  time=119.1s
+step   1000/7326  lr=2.908e-04  train_mse=0.156386  val_mse=0.156148  test_mse=0.155385  rmse=0.395156  gap=-0.000238  time=159.5s
+step   1250/7326  lr=2.842e-04  train_mse=0.150303  val_mse=0.151359  test_mse=0.150385  rmse=0.389049  gap=+0.001056  time=200.3s
+step   1500/7326  lr=2.761e-04  train_mse=0.146530  val_mse=0.147110  test_mse=0.146170  rmse=0.383549  gap=+0.000579  time=241.1s
+step   1750/7326  lr=2.664e-04  train_mse=0.141006  val_mse=0.141093  test_mse=0.140273  rmse=0.375623  gap=+0.000087  time=281.5s
+step   2000/7326  lr=2.552e-04  train_mse=0.135458  val_mse=0.135654  test_mse=0.135131  rmse=0.368313  gap=+0.000196  time=318.2s
+step   2250/7326  lr=2.428e-04  train_mse=0.127409  val_mse=0.127976  test_mse=0.127726  rmse=0.357737  gap=+0.000567  time=353.9s
+step   2500/7326  lr=2.293e-04  train_mse=0.119648  val_mse=0.120036  test_mse=0.119874  rmse=0.346462  gap=+0.000388  time=393.0s
+step   2750/7326  lr=2.148e-04  train_mse=0.110711  val_mse=0.110654  test_mse=0.109926  rmse=0.332647  gap=-0.000057  time=433.6s
+step   3000/7326  lr=1.996e-04  train_mse=0.101857  val_mse=0.101568  test_mse=0.100747  rmse=0.318697  gap=-0.000289  time=473.9s
+step   3250/7326  lr=1.837e-04  train_mse=0.091706  val_mse=0.093476  test_mse=0.092595  rmse=0.305739  gap=+0.001770  time=514.0s
+step   3500/7326  lr=1.674e-04  train_mse=0.085987  val_mse=0.087037  test_mse=0.086028  rmse=0.295020  gap=+0.001050  time=553.9s
+step   3750/7326  lr=1.509e-04  train_mse=0.079260  val_mse=0.080616  test_mse=0.079602  rmse=0.283929  gap=+0.001356  time=593.8s
+step   4000/7326  lr=1.344e-04  train_mse=0.073925  val_mse=0.075105  test_mse=0.074205  rmse=0.274052  gap=+0.001180  time=633.7s
+step   4250/7326  lr=1.181e-04  train_mse=0.070542  val_mse=0.070834  test_mse=0.069708  rmse=0.266146  gap=+0.000292  time=674.1s
+step   4500/7326  lr=1.022e-04  train_mse=0.067041  val_mse=0.067815  test_mse=0.066776  rmse=0.260413  gap=+0.000774  time=713.9s
+step   4750/7326  lr=8.683e-05  train_mse=0.064131  val_mse=0.065150  test_mse=0.064155  rmse=0.255244  gap=+0.001019  time=753.7s
+step   5000/7326  lr=7.225e-05  train_mse=0.062902  val_mse=0.064024  test_mse=0.062923  rmse=0.253031  gap=+0.001123  time=793.6s
+step   5250/7326  lr=5.861e-05  train_mse=0.061992  val_mse=0.062299  test_mse=0.061242  rmse=0.249598  gap=+0.000307  time=833.7s
+step   5500/7326  lr=4.608e-05  train_mse=0.059824  val_mse=0.060922  test_mse=0.059737  rmse=0.246823  gap=+0.001097  time=873.9s
+step   5750/7326  lr=3.482e-05  train_mse=0.059204  val_mse=0.059844  test_mse=0.058757  rmse=0.244630  gap=+0.000639  time=915.6s
+step   6000/7326  lr=2.495e-05  train_mse=0.058160  val_mse=0.059383  test_mse=0.058390  rmse=0.243686  gap=+0.001223  time=957.4s
+step   6250/7326  lr=1.659e-05  train_mse=0.058475  val_mse=0.058613  test_mse=0.057592  rmse=0.242101  gap=+0.000138  time=998.9s
+step   6500/7326  lr=9.860e-06  train_mse=0.057445  val_mse=0.058195  test_mse=0.057177  rmse=0.241236  gap=+0.000749  time=1041.0s
+step   6750/7326  lr=4.827e-06  train_mse=0.056953  val_mse=0.057972  test_mse=0.056989  rmse=0.240774  gap=+0.001019  time=1081.4s
+step   7000/7326  lr=1.556e-06  train_mse=0.057589  val_mse=0.057866  test_mse=0.056871  rmse=0.240553  gap=+0.000276  time=1117.8s
+step   7250/7326  lr=8.642e-08  train_mse=0.056861  val_mse=0.057843  test_mse=0.056847  rmse=0.240505  gap=+0.000981  time=1154.4s
+step   7326/7326  lr=1.458e-11  train_mse=0.057338  val_mse=0.057842  test_mse=0.056844  rmse=0.240503  gap=+0.000503  time=1170.9s
+  depth=5  test_mse=0.056844  AOFE=1.5285  AOFE_ratio=0.6660
+
+================================================================================
+[RNN] depth=  6  hidden=  168  active=948,760  pad=51,240  total=1,000,000  hidden/TEACHER_OUT=2.62
+================================================================================
+step    250/7326  lr=3.000e-04  train_mse=0.167918  val_mse=0.168677  test_mse=0.167293  rmse=0.410703  gap=+0.000758  time=46.2s
+step    500/7326  lr=2.987e-04  train_mse=0.168956  val_mse=0.168758  test_mse=0.167313  rmse=0.410801  gap=-0.000198  time=92.4s
+step    750/7326  lr=2.956e-04  train_mse=0.162426  val_mse=0.162662  test_mse=0.161979  rmse=0.403313  gap=+0.000236  time=138.4s
+step   1000/7326  lr=2.908e-04  train_mse=0.158099  val_mse=0.157744  test_mse=0.156980  rmse=0.397170  gap=-0.000355  time=184.5s
+step   1250/7326  lr=2.842e-04  train_mse=0.154065  val_mse=0.154302  test_mse=0.153548  rmse=0.392813  gap=+0.000237  time=230.2s
+step   1500/7326  lr=2.761e-04  train_mse=0.150838  val_mse=0.150873  test_mse=0.149974  rmse=0.388424  gap=+0.000035  time=275.8s
+step   1750/7326  lr=2.664e-04  train_mse=0.146641  val_mse=0.146362  test_mse=0.145385  rmse=0.382573  gap=-0.000279  time=320.7s
+step   2000/7326  lr=2.552e-04  train_mse=0.141443  val_mse=0.140432  test_mse=0.140045  rmse=0.374743  gap=-0.001011  time=365.9s
+step   2250/7326  lr=2.428e-04  train_mse=0.136024  val_mse=0.136118  test_mse=0.136094  rmse=0.368942  gap=+0.000094  time=411.0s
+step   2500/7326  lr=2.293e-04  train_mse=0.132090  val_mse=0.131441  test_mse=0.131713  rmse=0.362548  gap=-0.000648  time=451.7s
+step   2750/7326  lr=2.148e-04  train_mse=0.125886  val_mse=0.124536  test_mse=0.124710  rmse=0.352896  gap=-0.001350  time=491.7s
+step   3000/7326  lr=1.996e-04  train_mse=0.117791  val_mse=0.118223  test_mse=0.118304  rmse=0.343835  gap=+0.000432  time=534.6s
+step   3250/7326  lr=1.837e-04  train_mse=0.111233  val_mse=0.111252  test_mse=0.111225  rmse=0.333545  gap=+0.000019  time=581.3s
+step   3500/7326  lr=1.674e-04  train_mse=0.105919  val_mse=0.104883  test_mse=0.104929  rmse=0.323856  gap=-0.001036  time=626.7s
+step   3750/7326  lr=1.509e-04  train_mse=0.099209  val_mse=0.099365  test_mse=0.099025  rmse=0.315222  gap=+0.000156  time=672.4s
+step   4000/7326  lr=1.344e-04  train_mse=0.093726  val_mse=0.094466  test_mse=0.093984  rmse=0.307353  gap=+0.000740  time=717.7s
+step   4250/7326  lr=1.181e-04  train_mse=0.090684  val_mse=0.091756  test_mse=0.091267  rmse=0.302913  gap=+0.001072  time=763.7s
+step   4500/7326  lr=1.022e-04  train_mse=0.087623  val_mse=0.087600  test_mse=0.087028  rmse=0.295972  gap=-0.000024  time=809.1s
+step   4750/7326  lr=8.683e-05  train_mse=0.083824  val_mse=0.083977  test_mse=0.083408  rmse=0.289788  gap=+0.000153  time=854.5s
+step   5000/7326  lr=7.225e-05  train_mse=0.080839  val_mse=0.081261  test_mse=0.080667  rmse=0.285062  gap=+0.000422  time=893.9s
+step   5250/7326  lr=5.861e-05  train_mse=0.078570  val_mse=0.078987  test_mse=0.078406  rmse=0.281046  gap=+0.000416  time=931.6s
+step   5500/7326  lr=4.608e-05  train_mse=0.076212  val_mse=0.076540  test_mse=0.075910  rmse=0.276658  gap=+0.000328  time=969.3s
+step   5750/7326  lr=3.482e-05  train_mse=0.074764  val_mse=0.075031  test_mse=0.074515  rmse=0.273918  gap=+0.000266  time=1007.0s
+step   6000/7326  lr=2.495e-05  train_mse=0.072946  val_mse=0.073749  test_mse=0.073183  rmse=0.271567  gap=+0.000803  time=1044.7s
+step   6250/7326  lr=1.659e-05  train_mse=0.072285  val_mse=0.072817  test_mse=0.072219  rmse=0.269847  gap=+0.000533  time=1082.3s
+step   6500/7326  lr=9.860e-06  train_mse=0.071420  val_mse=0.072242  test_mse=0.071702  rmse=0.268780  gap=+0.000822  time=1120.0s
+step   6750/7326  lr=4.827e-06  train_mse=0.070770  val_mse=0.071875  test_mse=0.071330  rmse=0.268095  gap=+0.001105  time=1157.9s
+step   7000/7326  lr=1.556e-06  train_mse=0.070753  val_mse=0.071704  test_mse=0.071120  rmse=0.267776  gap=+0.000951  time=1195.3s
+step   7250/7326  lr=8.642e-08  train_mse=0.071214  val_mse=0.071666  test_mse=0.071075  rmse=0.267704  gap=+0.000451  time=1232.9s
+step   7326/7326  lr=1.458e-11  train_mse=0.071160  val_mse=0.071664  test_mse=0.071074  rmse=0.267701  gap=+0.000504  time=1250.0s
+  depth=6  test_mse=0.071074  AOFE=1.2671  AOFE_ratio=0.6852
+
+================================================================================
+[RNN] depth=  7  hidden=  152  active=917,688  pad=82,312  total=1,000,000  hidden/TEACHER_OUT=2.38
+================================================================================
+step    250/7326  lr=3.000e-04  train_mse=0.168504  val_mse=0.168703  test_mse=0.167149  rmse=0.410735  gap=+0.000199  time=9.9s
+step    500/7326  lr=2.987e-04  train_mse=0.167229  val_mse=0.168608  test_mse=0.167113  rmse=0.410619  gap=+0.001379  time=20.1s
+step    750/7326  lr=2.956e-04  train_mse=0.165268  val_mse=0.167071  test_mse=0.165706  rmse=0.408743  gap=+0.001803  time=29.9s
+step   1000/7326  lr=2.908e-04  train_mse=0.162463  val_mse=0.162170  test_mse=0.161452  rmse=0.402704  gap=-0.000293  time=40.1s
+step   1250/7326  lr=2.842e-04  train_mse=0.158670  val_mse=0.158569  test_mse=0.157931  rmse=0.398207  gap=-0.000101  time=50.1s
+step   1500/7326  lr=2.761e-04  train_mse=0.156655  val_mse=0.156177  test_mse=0.155445  rmse=0.395192  gap=-0.000478  time=60.2s
+step   1750/7326  lr=2.664e-04  train_mse=0.152095  val_mse=0.153698  test_mse=0.153002  rmse=0.392044  gap=+0.001603  time=70.2s
+step   2000/7326  lr=2.552e-04  train_mse=0.150504  val_mse=0.150530  test_mse=0.149906  rmse=0.387982  gap=+0.000026  time=80.5s
+step   2250/7326  lr=2.428e-04  train_mse=0.146855  val_mse=0.147427  test_mse=0.146997  rmse=0.383962  gap=+0.000572  time=90.5s
+step   2500/7326  lr=2.293e-04  train_mse=0.144496  val_mse=0.144348  test_mse=0.143930  rmse=0.379931  gap=-0.000148  time=101.0s
+step   2750/7326  lr=2.148e-04  train_mse=0.140345  val_mse=0.139614  test_mse=0.139249  rmse=0.373649  gap=-0.000731  time=110.9s
+step   3000/7326  lr=1.996e-04  train_mse=0.135444  val_mse=0.134892  test_mse=0.134739  rmse=0.367276  gap=-0.000552  time=121.3s
+step   3250/7326  lr=1.837e-04  train_mse=0.130114  val_mse=0.131258  test_mse=0.130930  rmse=0.362296  gap=+0.001144  time=131.3s
+step   3500/7326  lr=1.674e-04  train_mse=0.126002  val_mse=0.126046  test_mse=0.125531  rmse=0.355030  gap=+0.000044  time=141.7s
+step   3750/7326  lr=1.509e-04  train_mse=0.122475  val_mse=0.122555  test_mse=0.122286  rmse=0.350079  gap=+0.000080  time=151.7s
+step   4000/7326  lr=1.344e-04  train_mse=0.119041  val_mse=0.118963  test_mse=0.118733  rmse=0.344910  gap=-0.000079  time=162.0s
+step   4250/7326  lr=1.181e-04  train_mse=0.116077  val_mse=0.116066  test_mse=0.115909  rmse=0.340685  gap=-0.000011  time=172.0s
+step   4500/7326  lr=1.022e-04  train_mse=0.114559  val_mse=0.114189  test_mse=0.113735  rmse=0.337919  gap=-0.000370  time=182.3s
+step   4750/7326  lr=8.683e-05  train_mse=0.111823  val_mse=0.111873  test_mse=0.111610  rmse=0.334474  gap=+0.000050  time=192.3s
+step   5000/7326  lr=7.225e-05  train_mse=0.109501  val_mse=0.110233  test_mse=0.109879  rmse=0.332013  gap=+0.000732  time=202.6s
+step   5250/7326  lr=5.861e-05  train_mse=0.107819  val_mse=0.108635  test_mse=0.108188  rmse=0.329599  gap=+0.000816  time=212.8s
+step   5500/7326  lr=4.608e-05  train_mse=0.106955  val_mse=0.107215  test_mse=0.106754  rmse=0.327437  gap=+0.000260  time=222.8s
+step   5750/7326  lr=3.482e-05  train_mse=0.106220  val_mse=0.105948  test_mse=0.105558  rmse=0.325497  gap=-0.000271  time=233.1s
+step   6000/7326  lr=2.495e-05  train_mse=0.104829  val_mse=0.105081  test_mse=0.104637  rmse=0.324162  gap=+0.000252  time=243.1s
+step   6250/7326  lr=1.659e-05  train_mse=0.105505  val_mse=0.104472  test_mse=0.104032  rmse=0.323222  gap=-0.001032  time=253.3s
+step   6500/7326  lr=9.860e-06  train_mse=0.103912  val_mse=0.103949  test_mse=0.103518  rmse=0.322412  gap=+0.000038  time=263.4s
+step   6750/7326  lr=4.827e-06  train_mse=0.103655  val_mse=0.103714  test_mse=0.103242  rmse=0.322047  gap=+0.000060  time=273.7s
+step   7000/7326  lr=1.556e-06  train_mse=0.103579  val_mse=0.103602  test_mse=0.103133  rmse=0.321872  gap=+0.000023  time=283.6s
+step   7250/7326  lr=8.642e-08  train_mse=0.103758  val_mse=0.103577  test_mse=0.103101  rmse=0.321834  gap=-0.000181  time=293.9s
+step   7326/7326  lr=1.458e-11  train_mse=0.103231  val_mse=0.103576  test_mse=0.103099  rmse=0.321832  gap=+0.000346  time=297.8s
+  depth=7  test_mse=0.103099  AOFE=0.6938  AOFE_ratio=0.7307
+
+================================================================================
+[RNN] depth=  8  hidden=  144  active=949,744  pad=50,256  total=1,000,000  hidden/TEACHER_OUT=2.25
+================================================================================
+step    250/7326  lr=3.000e-04  train_mse=0.167895  val_mse=0.168685  test_mse=0.167209  rmse=0.410713  gap=+0.000790  time=9.1s
+step    500/7326  lr=2.987e-04  train_mse=0.167008  val_mse=0.168811  test_mse=0.167512  rmse=0.410866  gap=+0.001803  time=18.1s
+step    750/7326  lr=2.956e-04  train_mse=0.168277  val_mse=0.168842  test_mse=0.167357  rmse=0.410904  gap=+0.000566  time=27.1s
+step   1000/7326  lr=2.908e-04  train_mse=0.167574  val_mse=0.168824  test_mse=0.167233  rmse=0.410882  gap=+0.001251  time=36.1s
+step   1250/7326  lr=2.842e-04  train_mse=0.164791  val_mse=0.165472  test_mse=0.164368  rmse=0.406783  gap=+0.000681  time=45.1s
+step   1500/7326  lr=2.761e-04  train_mse=0.160411  val_mse=0.161942  test_mse=0.161190  rmse=0.402420  gap=+0.001531  time=54.1s
+step   1750/7326  lr=2.664e-04  train_mse=0.158715  val_mse=0.158115  test_mse=0.157152  rmse=0.397637  gap=-0.000600  time=63.2s
+step   2000/7326  lr=2.552e-04  train_mse=0.154828  val_mse=0.155172  test_mse=0.154419  rmse=0.393918  gap=+0.000344  time=72.5s
+step   2250/7326  lr=2.428e-04  train_mse=0.153051  val_mse=0.153606  test_mse=0.152997  rmse=0.391926  gap=+0.000555  time=81.4s
+step   2500/7326  lr=2.293e-04  train_mse=0.150816  val_mse=0.151241  test_mse=0.150463  rmse=0.388897  gap=+0.000424  time=92.2s
+step   2750/7326  lr=2.148e-04  train_mse=0.148860  val_mse=0.148522  test_mse=0.147884  rmse=0.385385  gap=-0.000338  time=103.0s
+step   3000/7326  lr=1.996e-04  train_mse=0.143958  val_mse=0.145853  test_mse=0.145427  rmse=0.381908  gap=+0.001896  time=113.8s
+step   3250/7326  lr=1.837e-04  train_mse=0.142228  val_mse=0.142550  test_mse=0.142020  rmse=0.377558  gap=+0.000322  time=123.9s
+step   3500/7326  lr=1.674e-04  train_mse=0.138912  val_mse=0.139249  test_mse=0.138754  rmse=0.373161  gap=+0.000337  time=134.2s
+step   3750/7326  lr=1.509e-04  train_mse=0.134767  val_mse=0.134791  test_mse=0.134164  rmse=0.367139  gap=+0.000024  time=144.4s
+step   4000/7326  lr=1.344e-04  train_mse=0.130903  val_mse=0.130689  test_mse=0.130111  rmse=0.361510  gap=-0.000213  time=155.0s
+step   4250/7326  lr=1.181e-04  train_mse=0.127141  val_mse=0.127674  test_mse=0.126827  rmse=0.357315  gap=+0.000533  time=165.0s
+step   4500/7326  lr=1.022e-04  train_mse=0.123666  val_mse=0.124123  test_mse=0.123260  rmse=0.352310  gap=+0.000456  time=175.5s
+step   4750/7326  lr=8.683e-05  train_mse=0.122069  val_mse=0.122126  test_mse=0.121165  rmse=0.349465  gap=+0.000057  time=185.6s
+step   5000/7326  lr=7.225e-05  train_mse=0.118753  val_mse=0.119285  test_mse=0.118129  rmse=0.345376  gap=+0.000532  time=196.3s
+step   5250/7326  lr=5.861e-05  train_mse=0.115915  val_mse=0.117121  test_mse=0.116072  rmse=0.342229  gap=+0.001206  time=206.4s
+step   5500/7326  lr=4.608e-05  train_mse=0.115252  val_mse=0.115608  test_mse=0.114436  rmse=0.340012  gap=+0.000357  time=216.8s
+step   5750/7326  lr=3.482e-05  train_mse=0.113661  val_mse=0.114735  test_mse=0.113517  rmse=0.338725  gap=+0.001074  time=226.9s
+step   6000/7326  lr=2.495e-05  train_mse=0.113275  val_mse=0.113917  test_mse=0.112688  rmse=0.337515  gap=+0.000641  time=237.3s
+step   6250/7326  lr=1.659e-05  train_mse=0.111766  val_mse=0.113305  test_mse=0.112082  rmse=0.336609  gap=+0.001539  time=247.4s
+step   6500/7326  lr=9.860e-06  train_mse=0.110915  val_mse=0.113145  test_mse=0.111857  rmse=0.336371  gap=+0.002231  time=257.9s
+step   6750/7326  lr=4.827e-06  train_mse=0.111780  val_mse=0.112728  test_mse=0.111460  rmse=0.335750  gap=+0.000948  time=267.8s
+step   7000/7326  lr=1.556e-06  train_mse=0.112596  val_mse=0.112602  test_mse=0.111369  rmse=0.335563  gap=+0.000006  time=278.3s
+step   7250/7326  lr=8.642e-08  train_mse=0.111646  val_mse=0.112581  test_mse=0.111343  rmse=0.335531  gap=+0.000936  time=288.4s
+step   7326/7326  lr=1.458e-11  train_mse=0.112683  val_mse=0.112578  test_mse=0.111341  rmse=0.335527  gap=-0.000105  time=292.6s
+  depth=8  test_mse=0.111341  AOFE=0.6603  AOFE_ratio=0.7671
+
+================================================================================
+[RNN] depth=  9  hidden=  136  active=959,816  pad=40,184  total=1,000,000  hidden/TEACHER_OUT=2.12
+================================================================================
+step    250/7326  lr=3.000e-04  train_mse=0.166809  val_mse=0.168620  test_mse=0.167117  rmse=0.410633  gap=+0.001811  time=11.6s
+step    500/7326  lr=2.987e-04  train_mse=0.169450  val_mse=0.168729  test_mse=0.167073  rmse=0.410766  gap=-0.000721  time=22.7s
+step    750/7326  lr=2.956e-04  train_mse=0.167479  val_mse=0.168899  test_mse=0.167465  rmse=0.410974  gap=+0.001420  time=34.4s
+step   1000/7326  lr=2.908e-04  train_mse=0.167411  val_mse=0.168780  test_mse=0.167391  rmse=0.410829  gap=+0.001369  time=45.5s
+step   1250/7326  lr=2.842e-04  train_mse=0.168777  val_mse=0.168855  test_mse=0.167407  rmse=0.410920  gap=+0.000078  time=57.0s
+step   1500/7326  lr=2.761e-04  train_mse=0.167873  val_mse=0.168683  test_mse=0.167088  rmse=0.410710  gap=+0.000810  time=68.2s
+step   1750/7326  lr=2.664e-04  train_mse=0.165376  val_mse=0.166641  test_mse=0.165215  rmse=0.408217  gap=+0.001266  time=79.8s
+step   2000/7326  lr=2.552e-04  train_mse=0.160803  val_mse=0.160861  test_mse=0.160117  rmse=0.401075  gap=+0.000058  time=91.1s
+step   2250/7326  lr=2.428e-04  train_mse=0.158002  val_mse=0.158460  test_mse=0.157566  rmse=0.398070  gap=+0.000458  time=102.6s
+step   2500/7326  lr=2.293e-04  train_mse=0.156419  val_mse=0.156173  test_mse=0.155303  rmse=0.395187  gap=-0.000246  time=113.9s
+step   2750/7326  lr=2.148e-04  train_mse=0.154452  val_mse=0.153945  test_mse=0.153428  rmse=0.392359  gap=-0.000507  time=125.6s
+step   3000/7326  lr=1.996e-04  train_mse=0.152333  val_mse=0.152646  test_mse=0.151923  rmse=0.390699  gap=+0.000313  time=136.8s
+step   3250/7326  lr=1.837e-04  train_mse=0.149922  val_mse=0.150927  test_mse=0.150152  rmse=0.388493  gap=+0.001005  time=148.5s
+step   3500/7326  lr=1.674e-04  train_mse=0.148611  val_mse=0.148408  test_mse=0.147674  rmse=0.385237  gap=-0.000203  time=159.7s
+step   3750/7326  lr=1.509e-04  train_mse=0.144788  val_mse=0.146202  test_mse=0.145357  rmse=0.382363  gap=+0.001414  time=171.4s
+step   4000/7326  lr=1.344e-04  train_mse=0.142311  val_mse=0.142374  test_mse=0.141499  rmse=0.377324  gap=+0.000062  time=182.7s
+step   4250/7326  lr=1.181e-04  train_mse=0.139926  val_mse=0.139191  test_mse=0.138327  rmse=0.373084  gap=-0.000735  time=194.3s
+step   4500/7326  lr=1.022e-04  train_mse=0.135961  val_mse=0.136253  test_mse=0.135428  rmse=0.369125  gap=+0.000292  time=205.5s
+step   4750/7326  lr=8.683e-05  train_mse=0.133730  val_mse=0.134351  test_mse=0.133530  rmse=0.366539  gap=+0.000621  time=217.1s
+step   5000/7326  lr=7.225e-05  train_mse=0.131403  val_mse=0.132503  test_mse=0.131585  rmse=0.364009  gap=+0.001099  time=228.5s
+step   5250/7326  lr=5.861e-05  train_mse=0.129576  val_mse=0.129400  test_mse=0.128554  rmse=0.359722  gap=-0.000176  time=239.8s
+step   5500/7326  lr=4.608e-05  train_mse=0.126832  val_mse=0.127882  test_mse=0.127053  rmse=0.357606  gap=+0.001050  time=251.3s
+step   5750/7326  lr=3.482e-05  train_mse=0.126336  val_mse=0.126436  test_mse=0.125414  rmse=0.355578  gap=+0.000100  time=262.6s
+step   6000/7326  lr=2.495e-05  train_mse=0.125357  val_mse=0.125226  test_mse=0.124217  rmse=0.353873  gap=-0.000131  time=274.1s
+step   6250/7326  lr=1.659e-05  train_mse=0.124281  val_mse=0.124648  test_mse=0.123634  rmse=0.353055  gap=+0.000366  time=285.3s
+step   6500/7326  lr=9.860e-06  train_mse=0.123329  val_mse=0.124061  test_mse=0.123122  rmse=0.352222  gap=+0.000732  time=296.9s
+step   6750/7326  lr=4.827e-06  train_mse=0.122980  val_mse=0.123761  test_mse=0.122768  rmse=0.351796  gap=+0.000781  time=308.0s
+step   7000/7326  lr=1.556e-06  train_mse=0.123261  val_mse=0.123585  test_mse=0.122604  rmse=0.351547  gap=+0.000325  time=318.6s
+step   7250/7326  lr=8.642e-08  train_mse=0.121910  val_mse=0.123548  test_mse=0.122566  rmse=0.351493  gap=+0.001637  time=328.6s
+step   7326/7326  lr=1.458e-11  train_mse=0.123549  val_mse=0.123547  test_mse=0.122566  rmse=0.351492  gap=-0.000002  time=332.6s
+  depth=9  test_mse=0.122566  AOFE=0.3964  AOFE_ratio=0.7734
+
+================================================================================
+[RNN] depth= 10  hidden=  128  active=950,208  pad=49,792  total=1,000,000  hidden/TEACHER_OUT=2.00
+================================================================================
+step    250/7326  lr=3.000e-04  train_mse=0.169325  val_mse=0.168675  test_mse=0.167145  rmse=0.410701  gap=-0.000650  time=6.6s
+step    500/7326  lr=2.987e-04  train_mse=0.168535  val_mse=0.168615  test_mse=0.167158  rmse=0.410627  gap=+0.000080  time=13.3s
+step    750/7326  lr=2.956e-04  train_mse=0.165580  val_mse=0.168593  test_mse=0.167027  rmse=0.410601  gap=+0.003014  time=20.0s
+step   1000/7326  lr=2.908e-04  train_mse=0.166921  val_mse=0.168759  test_mse=0.167223  rmse=0.410803  gap=+0.001839  time=26.5s
+step   1250/7326  lr=2.842e-04  train_mse=0.170030  val_mse=0.168851  test_mse=0.167243  rmse=0.410915  gap=-0.001179  time=33.3s
+step   1500/7326  lr=2.761e-04  train_mse=0.168780  val_mse=0.168684  test_mse=0.167105  rmse=0.410712  gap=-0.000096  time=40.0s
+step   1750/7326  lr=2.664e-04  train_mse=0.168688  val_mse=0.168659  test_mse=0.167152  rmse=0.410681  gap=-0.000030  time=46.7s
+step   2000/7326  lr=2.552e-04  train_mse=0.167677  val_mse=0.168822  test_mse=0.167269  rmse=0.410880  gap=+0.001145  time=53.3s
+step   2250/7326  lr=2.428e-04  train_mse=0.166446  val_mse=0.168591  test_mse=0.167024  rmse=0.410598  gap=+0.002144  time=60.0s
+step   2500/7326  lr=2.293e-04  train_mse=0.167959  val_mse=0.168764  test_mse=0.167171  rmse=0.410809  gap=+0.000805  time=66.8s
+step   2750/7326  lr=2.148e-04  train_mse=0.169003  val_mse=0.168990  test_mse=0.167424  rmse=0.411084  gap=-0.000013  time=73.2s
+step   3000/7326  lr=1.996e-04  train_mse=0.166983  val_mse=0.168584  test_mse=0.167006  rmse=0.410590  gap=+0.001602  time=80.0s
+step   3250/7326  lr=1.837e-04  train_mse=0.168568  val_mse=0.168508  test_mse=0.167048  rmse=0.410497  gap=-0.000060  time=86.7s
+step   3500/7326  lr=1.674e-04  train_mse=0.169258  val_mse=0.168723  test_mse=0.167163  rmse=0.410759  gap=-0.000535  time=93.2s
+step   3750/7326  lr=1.509e-04  train_mse=0.162870  val_mse=0.165663  test_mse=0.164355  rmse=0.407017  gap=+0.002792  time=99.9s
+step   4000/7326  lr=1.344e-04  train_mse=0.162316  val_mse=0.162167  test_mse=0.161018  rmse=0.402699  gap=-0.000149  time=106.7s
+step   4250/7326  lr=1.181e-04  train_mse=0.159645  val_mse=0.160310  test_mse=0.159376  rmse=0.400387  gap=+0.000665  time=113.1s
+step   4500/7326  lr=1.022e-04  train_mse=0.157728  val_mse=0.158474  test_mse=0.157713  rmse=0.398088  gap=+0.000746  time=119.9s
+step   4750/7326  lr=8.683e-05  train_mse=0.157474  val_mse=0.157201  test_mse=0.156448  rmse=0.396486  gap=-0.000272  time=126.7s
+step   5000/7326  lr=7.225e-05  train_mse=0.154742  val_mse=0.156382  test_mse=0.155669  rmse=0.395452  gap=+0.001640  time=133.4s
+step   5250/7326  lr=5.861e-05  train_mse=0.155650  val_mse=0.155764  test_mse=0.155057  rmse=0.394670  gap=+0.000114  time=140.1s
+step   5500/7326  lr=4.608e-05  train_mse=0.154607  val_mse=0.155325  test_mse=0.154600  rmse=0.394113  gap=+0.000719  time=146.8s
+step   5750/7326  lr=3.482e-05  train_mse=0.155478  val_mse=0.154698  test_mse=0.153947  rmse=0.393317  gap=-0.000780  time=153.6s
+step   6000/7326  lr=2.495e-05  train_mse=0.154589  val_mse=0.154320  test_mse=0.153630  rmse=0.392836  gap=-0.000269  time=160.2s
+step   6250/7326  lr=1.659e-05  train_mse=0.151963  val_mse=0.154062  test_mse=0.153327  rmse=0.392508  gap=+0.002100  time=166.9s
+step   6500/7326  lr=9.860e-06  train_mse=0.154919  val_mse=0.153863  test_mse=0.153192  rmse=0.392253  gap=-0.001056  time=173.6s
+step   6750/7326  lr=4.827e-06  train_mse=0.153858  val_mse=0.153808  test_mse=0.153140  rmse=0.392184  gap=-0.000050  time=180.1s
+step   7000/7326  lr=1.556e-06  train_mse=0.153268  val_mse=0.153715  test_mse=0.153039  rmse=0.392065  gap=+0.000448  time=186.9s
+step   7250/7326  lr=8.642e-08  train_mse=0.154183  val_mse=0.153698  test_mse=0.153024  rmse=0.392043  gap=-0.000485  time=193.6s
+step   7326/7326  lr=1.458e-11  train_mse=0.152959  val_mse=0.153698  test_mse=0.153024  rmse=0.392044  gap=+0.000740  time=196.5s
+  depth=10  test_mse=0.153024  AOFE=0.1057  AOFE_ratio=0.8837
+
+================================================================================
+[RNN] depth= 11  hidden=  120  active=923,224  pad=76,776  total=1,000,000  hidden/TEACHER_OUT=1.88
+================================================================================
+step    250/7326  lr=3.000e-04  train_mse=0.166191  val_mse=0.168631  test_mse=0.167064  rmse=0.410647  gap=+0.002440  time=6.9s
+step    500/7326  lr=2.987e-04  train_mse=0.169092  val_mse=0.168816  test_mse=0.167252  rmse=0.410873  gap=-0.000276  time=13.8s
+step    750/7326  lr=2.956e-04  train_mse=0.167850  val_mse=0.168709  test_mse=0.167228  rmse=0.410742  gap=+0.000859  time=20.4s
+step   1000/7326  lr=2.908e-04  train_mse=0.167743  val_mse=0.168626  test_mse=0.167229  rmse=0.410641  gap=+0.000883  time=27.2s
+step   1250/7326  lr=2.842e-04  train_mse=0.168848  val_mse=0.168807  test_mse=0.167237  rmse=0.410861  gap=-0.000041  time=34.1s
+step   1500/7326  lr=2.761e-04  train_mse=0.168260  val_mse=0.168542  test_mse=0.167028  rmse=0.410539  gap=+0.000282  time=40.8s
+step   1750/7326  lr=2.664e-04  train_mse=0.166383  val_mse=0.168827  test_mse=0.167230  rmse=0.410886  gap=+0.002444  time=47.5s
+step   2000/7326  lr=2.552e-04  train_mse=0.169785  val_mse=0.168865  test_mse=0.167428  rmse=0.410931  gap=-0.000920  time=54.3s
+step   2250/7326  lr=2.428e-04  train_mse=0.167878  val_mse=0.168644  test_mse=0.167215  rmse=0.410663  gap=+0.000766  time=61.1s
+step   2500/7326  lr=2.293e-04  train_mse=0.167520  val_mse=0.168551  test_mse=0.167003  rmse=0.410549  gap=+0.001031  time=67.8s
+step   2750/7326  lr=2.148e-04  train_mse=0.166139  val_mse=0.168664  test_mse=0.167115  rmse=0.410687  gap=+0.002525  time=74.6s
+step   3000/7326  lr=1.996e-04  train_mse=0.167099  val_mse=0.168661  test_mse=0.167174  rmse=0.410684  gap=+0.001562  time=81.5s
+step   3250/7326  lr=1.837e-04  train_mse=0.166957  val_mse=0.168481  test_mse=0.166922  rmse=0.410464  gap=+0.001524  time=88.2s
+step   3500/7326  lr=1.674e-04  train_mse=0.166720  val_mse=0.168715  test_mse=0.167004  rmse=0.410749  gap=+0.001995  time=95.1s
+step   3750/7326  lr=1.509e-04  train_mse=0.167527  val_mse=0.168546  test_mse=0.167014  rmse=0.410544  gap=+0.001019  time=101.9s
+step   4000/7326  lr=1.344e-04  train_mse=0.167384  val_mse=0.168564  test_mse=0.167026  rmse=0.410566  gap=+0.001180  time=108.6s
+step   4250/7326  lr=1.181e-04  train_mse=0.168515  val_mse=0.168441  test_mse=0.166978  rmse=0.410416  gap=-0.000074  time=115.5s
+step   4500/7326  lr=1.022e-04  train_mse=0.168502  val_mse=0.168369  test_mse=0.166902  rmse=0.410328  gap=-0.000133  time=122.3s
+step   4750/7326  lr=8.683e-05  train_mse=0.167384  val_mse=0.168483  test_mse=0.166881  rmse=0.410467  gap=+0.001098  time=129.1s
+step   5000/7326  lr=7.225e-05  train_mse=0.169034  val_mse=0.168432  test_mse=0.166943  rmse=0.410404  gap=-0.000602  time=135.8s
+step   5250/7326  lr=5.861e-05  train_mse=0.167771  val_mse=0.168363  test_mse=0.166884  rmse=0.410320  gap=+0.000592  time=142.7s
+step   5500/7326  lr=4.608e-05  train_mse=0.167515  val_mse=0.168337  test_mse=0.166813  rmse=0.410289  gap=+0.000822  time=149.7s
+step   5750/7326  lr=3.482e-05  train_mse=0.167930  val_mse=0.168321  test_mse=0.166810  rmse=0.410270  gap=+0.000391  time=156.4s
+step   6000/7326  lr=2.495e-05  train_mse=0.166975  val_mse=0.168282  test_mse=0.166815  rmse=0.410221  gap=+0.001307  time=163.3s
+step   6250/7326  lr=1.659e-05  train_mse=0.166642  val_mse=0.168285  test_mse=0.166773  rmse=0.410225  gap=+0.001643  time=170.2s
+step   6500/7326  lr=9.860e-06  train_mse=0.167097  val_mse=0.168260  test_mse=0.166802  rmse=0.410196  gap=+0.001163  time=176.8s
+step   6750/7326  lr=4.827e-06  train_mse=0.167429  val_mse=0.168284  test_mse=0.166768  rmse=0.410224  gap=+0.000855  time=183.7s
+step   7000/7326  lr=1.556e-06  train_mse=0.166707  val_mse=0.168266  test_mse=0.166765  rmse=0.410202  gap=+0.001559  time=190.5s
+step   7250/7326  lr=8.642e-08  train_mse=0.167646  val_mse=0.168262  test_mse=0.166765  rmse=0.410197  gap=+0.000616  time=197.1s
+step   7326/7326  lr=1.458e-11  train_mse=0.167958  val_mse=0.168262  test_mse=0.166765  rmse=0.410197  gap=+0.000303  time=200.0s
+  depth=11  test_mse=0.166802  AOFE=0.0000  AOFE_ratio=1.0000
+
+================================================================================
+[RNN] depth= 12  hidden=  112  active=881,168  pad=118,832  total=1,000,000  hidden/TEACHER_OUT=1.75
+================================================================================
+step    250/7326  lr=3.000e-04  train_mse=0.168967  val_mse=0.168508  test_mse=0.166928  rmse=0.410498  gap=-0.000458  time=7.3s
+step    500/7326  lr=2.987e-04  train_mse=0.165844  val_mse=0.168702  test_mse=0.167244  rmse=0.410734  gap=+0.002858  time=14.7s
+step    750/7326  lr=2.956e-04  train_mse=0.168557  val_mse=0.168832  test_mse=0.167348  rmse=0.410891  gap=+0.000275  time=22.0s
+step   1000/7326  lr=2.908e-04  train_mse=0.169154  val_mse=0.168666  test_mse=0.167288  rmse=0.410689  gap=-0.000489  time=29.4s
+step   1250/7326  lr=2.842e-04  train_mse=0.168376  val_mse=0.168486  test_mse=0.167059  rmse=0.410471  gap=+0.000110  time=36.2s
+step   1500/7326  lr=2.761e-04  train_mse=0.168368  val_mse=0.168518  test_mse=0.167005  rmse=0.410510  gap=+0.000151  time=42.9s
+step   1750/7326  lr=2.664e-04  train_mse=0.168332  val_mse=0.168709  test_mse=0.167348  rmse=0.410742  gap=+0.000378  time=50.0s
+step   2000/7326  lr=2.552e-04  train_mse=0.165804  val_mse=0.168848  test_mse=0.167298  rmse=0.410911  gap=+0.003044  time=57.1s
+step   2250/7326  lr=2.428e-04  train_mse=0.168378  val_mse=0.168600  test_mse=0.167004  rmse=0.410610  gap=+0.000222  time=63.9s
+step   2500/7326  lr=2.293e-04  train_mse=0.167182  val_mse=0.168671  test_mse=0.167255  rmse=0.410696  gap=+0.001489  time=71.0s
+step   2750/7326  lr=2.148e-04  train_mse=0.167951  val_mse=0.168572  test_mse=0.167131  rmse=0.410575  gap=+0.000620  time=78.0s
+step   3000/7326  lr=1.996e-04  train_mse=0.166900  val_mse=0.168518  test_mse=0.166995  rmse=0.410509  gap=+0.001618  time=84.8s
+step   3250/7326  lr=1.837e-04  train_mse=0.168902  val_mse=0.168467  test_mse=0.167028  rmse=0.410447  gap=-0.000435  time=91.9s
+step   3500/7326  lr=1.674e-04  train_mse=0.168488  val_mse=0.168407  test_mse=0.166941  rmse=0.410374  gap=-0.000081  time=99.0s
+step   3750/7326  lr=1.509e-04  train_mse=0.167207  val_mse=0.168482  test_mse=0.167007  rmse=0.410465  gap=+0.001274  time=105.9s
+step   4000/7326  lr=1.344e-04  train_mse=0.169847  val_mse=0.168523  test_mse=0.166945  rmse=0.410515  gap=-0.001325  time=112.9s
+step   4250/7326  lr=1.181e-04  train_mse=0.167793  val_mse=0.168536  test_mse=0.166980  rmse=0.410532  gap=+0.000743  time=119.9s
+step   4500/7326  lr=1.022e-04  train_mse=0.167767  val_mse=0.168499  test_mse=0.166893  rmse=0.410487  gap=+0.000732  time=126.9s
+step   4750/7326  lr=8.683e-05  train_mse=0.166482  val_mse=0.168369  test_mse=0.166816  rmse=0.410328  gap=+0.001888  time=133.7s
+step   5000/7326  lr=7.225e-05  train_mse=0.167990  val_mse=0.168440  test_mse=0.166925  rmse=0.410415  gap=+0.000450  time=140.8s
+step   5250/7326  lr=5.861e-05  train_mse=0.167113  val_mse=0.168399  test_mse=0.166855  rmse=0.410364  gap=+0.001285  time=147.9s
+step   5500/7326  lr=4.608e-05  train_mse=0.168845  val_mse=0.168143  test_mse=0.166641  rmse=0.410052  gap=-0.000702  time=154.7s
+step   5750/7326  lr=3.482e-05  train_mse=0.165211  val_mse=0.166525  test_mse=0.165122  rmse=0.408075  gap=+0.001314  time=161.8s
+step   6000/7326  lr=2.495e-05  train_mse=0.164860  val_mse=0.165305  test_mse=0.163867  rmse=0.406577  gap=+0.000445  time=169.0s
+step   6250/7326  lr=1.659e-05  train_mse=0.164117  val_mse=0.164756  test_mse=0.163363  rmse=0.405902  gap=+0.000639  time=175.7s
+step   6500/7326  lr=9.860e-06  train_mse=0.165336  val_mse=0.164454  test_mse=0.163108  rmse=0.405529  gap=-0.000883  time=182.8s
+step   6750/7326  lr=4.827e-06  train_mse=0.163906  val_mse=0.164268  test_mse=0.162952  rmse=0.405300  gap=+0.000361  time=189.9s
+step   7000/7326  lr=1.556e-06  train_mse=0.164605  val_mse=0.164221  test_mse=0.162896  rmse=0.405242  gap=-0.000384  time=196.7s
+step   7250/7326  lr=8.642e-08  train_mse=0.163702  val_mse=0.164191  test_mse=0.162871  rmse=0.405205  gap=+0.000489  time=203.9s
+step   7326/7326  lr=1.458e-11  train_mse=0.164975  val_mse=0.164191  test_mse=0.162871  rmse=0.405204  gap=-0.000784  time=206.9s
+  depth=12  test_mse=0.162871  AOFE=0.0273  AOFE_ratio=0.9360
+
+--------------------------------------------------------------------------------
+Unified AOFE metrics (raw test_mse, no log):
+  Pearson (AOFE=offdiag_energy,     test_mse) = -0.9914   Spearman = -0.9879
+  Pearson (AOFE_ratio=offdiag_ratio, test_mse) = 0.9650   Spearman = 1.0000
+Saved: ../results_rnn_shape_sweep/results.csv
+Saved: ../results_rnn_shape_sweep/results.npy
+--------------------------------------------------------------------------------
