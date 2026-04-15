@@ -952,6 +952,29 @@ def plot_multi_n_summary(
     if not all_results:
         return
 
+    # Prefer the actual budgets present in the CSV / current result list so
+    # plot_only always regenerates a complete summary after new N values are added.
+    available_param_groups = sorted({int(r["target_n"]) for r in all_results})
+    if param_groups:
+        requested = [int(n) for n in param_groups]
+        missing = [n for n in requested if n not in available_param_groups]
+        if missing:
+            print(
+                f"[plot_multi_n_summary] Missing N in all_results, falling back to "
+                f"available budgets: {available_param_groups}"
+            )
+            param_groups = available_param_groups
+        else:
+            extras = [n for n in available_param_groups if n not in requested]
+            if extras:
+                print(
+                    f"[plot_multi_n_summary] Found extra budgets in results: {extras}; "
+                    f"including all available budgets in summary."
+                )
+                param_groups = available_param_groups
+    else:
+        param_groups = available_param_groups
+
     try:
         cmap   = matplotlib.colormaps["tab10"]
     except AttributeError:
@@ -1067,6 +1090,83 @@ def plot_multi_n_summary(
         dpi=150, bbox_inches="tight",
     )
     plt.close(fig2)
+
+    # --- Additional: best-loss frontier vs WtW AOFE_ratio ---
+    frontier = []
+    for n in param_groups:
+        rows = [r for r in all_results if r["target_n"] == n]
+        if not rows:
+            continue
+        best = min(rows, key=lambda r: r["test_ce"])
+        frontier.append(best)
+
+    if len(frontier) >= 2:
+        frontier = sorted(frontier, key=lambda r: r["target_n"])
+        xs = np.array([r["wtw_aofe_ratio"] for r in frontier], dtype=np.float64)
+        ys = np.array([r["test_ce"] for r in frontier], dtype=np.float64)
+        ns = np.array([r["target_n"] for r in frontier], dtype=np.int64)
+
+        # Scaling-law-style fit:  y = a * x^b
+        log_coef = np.polyfit(np.log(xs), np.log(ys), deg=1)
+        power_b = float(log_coef[0])
+        power_a = float(np.exp(log_coef[1]))
+        ys_hat = power_a * (xs ** power_b)
+        ss_res = float(((ys - ys_hat) ** 2).sum())
+        ss_tot = float(((ys - ys.mean()) ** 2).sum()) + 1e-12
+        r2 = 1.0 - ss_res / ss_tot
+
+        xfit = np.linspace(xs.min() * 0.98, xs.max() * 1.02, 200)
+        yfit = power_a * (xfit ** power_b)
+
+        fig3, axes3 = plt.subplots(1, 2, figsize=(13, 5))
+        fig3.suptitle(
+            "Optimal Frontier: Best Loss vs. Best WtW AOFE_ratio",
+            fontsize=13, fontweight="bold",
+        )
+
+        # Linear axes: easier to read actual values.
+        ax = axes3[0]
+        ax.scatter(xs, ys, s=90, color="tab:blue", zorder=4)
+        ax.plot(xfit, yfit, "--", color="tab:red", lw=2.0,
+                label=f"power law: CE = {power_a:.3f} · WtW^({power_b:.3f})")
+        for x, y, n, row in zip(xs, ys, ns, frontier):
+            ax.annotate(
+                f"{n/1e6:.1f}M\n(d={row['depth']}, w={row['d_model']})",
+                xy=(x, y),
+                xytext=(5, 5),
+                textcoords="offset points",
+                fontsize=8,
+                alpha=0.85,
+            )
+        ax.set_xlabel("Best-shape WtW AOFE_ratio", fontsize=11)
+        ax.set_ylabel("Best test cross-entropy (nats/byte)", fontsize=11)
+        ax.set_title(f"Power-law fit on frontier  ($R^2$={r2:.3f})", fontsize=11)
+        ax.grid(True, alpha=0.4)
+        ax.legend(fontsize=9)
+
+        # Log-log panel: closest to the usual scaling-law presentation.
+        ax = axes3[1]
+        ax.scatter(xs, ys, s=90, color="tab:blue", zorder=4)
+        ax.plot(xfit, yfit, "--", color="tab:red", lw=2.0)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("Best-shape WtW AOFE_ratio (log)", fontsize=11)
+        ax.set_ylabel("Best test cross-entropy (log)", fontsize=11)
+        ax.set_title("Log-log view", fontsize=11)
+        ax.grid(True, alpha=0.4, which="both")
+
+        fig3.tight_layout()
+        fig3.savefig(
+            os.path.join(out_dir, "optimal_loss_vs_wtw_aofe_ratio.png"),
+            dpi=150, bbox_inches="tight",
+        )
+        plt.close(fig3)
+
+        print(
+            "[optimal frontier fit] "
+            f"best_test_ce ≈ {power_a:.6f} * (best_wtw_aofe_ratio)^{power_b:.6f}   "
+            f"(R^2={r2:.4f}, budgets={len(frontier)})"
+        )
 
 
 def print_summary_table(all_results: List[Dict], param_groups: List[int]) -> None:
