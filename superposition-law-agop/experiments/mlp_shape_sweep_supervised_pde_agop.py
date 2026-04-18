@@ -80,6 +80,8 @@ if os.environ.get("DISPLAY", "") == "":
     matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from experiments.compositional_generators import generate_compositional_vector_inputs
+
 
 # -----------------------
 # Reproducibility helpers
@@ -173,13 +175,16 @@ def spearman_corr(x: np.ndarray, y: np.ndarray) -> float:
 
 class TeacherStudentDataset(torch.utils.data.Dataset):
     """
-    Multi-output nonlinear regression via a frozen random teacher MLP.
+    Multi-output nonlinear regression via a frozen random teacher MLP on
+    compositional inputs with repeated latent motifs.
 
     Teacher:  Linear(in_dim → H) → GELU → Linear(H → H) → GELU → Linear(H → out_dim)
-    Data:     x ~ N(0, I_{in_dim}),  y = teacher(x)
+    Data:     x = g(z) where many coordinates share the same latent causes,
+              y = teacher(x)
 
-    Both inputs and outputs are normalized per-dimension (zero mean, unit std)
-    at dataset construction time for numerical stability.
+    Inputs are generated from a small motif bank reused across coordinate groups,
+    so the task remains fully synthetic/controllable while demanding feature reuse
+    rather than pure coordinate-wise disentanglement.
 
     This creates a rich nonlinear regression target where different student
     depths/widths learn genuinely different effective feature representations,
@@ -217,10 +222,16 @@ class TeacherStudentDataset(torch.utils.data.Dataset):
         W3 = (torch.randn(teacher_hidden, teacher_hidden, generator=g_t) * s2).to(dtype)
         W4 = (torch.randn(teacher_hidden, out_dim,        generator=g_t) * s2).to(dtype)
 
-        # Generate raw inputs
-        g_d = torch.Generator()
-        g_d.manual_seed(int(data_seed))
-        x_raw = torch.randn(self.size, in_dim, generator=g_d, dtype=dtype)
+        # Generate compositional inputs with explicit latent reuse across groups.
+        x_raw = generate_compositional_vector_inputs(
+            size=self.size,
+            in_dim=in_dim,
+            structure_seed=int(teacher_seed) + 17,
+            sample_seed=int(data_seed),
+            latent_dim=min(8, max(4, in_dim // 8)),
+            motif_count=min(4, max(2, in_dim // 16)),
+            dtype=dtype,
+        )
 
         # Teacher forward pass (no biases — keeps symmetry simple)
         h1    = F.gelu(x_raw @ W1)
@@ -747,13 +758,13 @@ def main() -> None:
     unique_tokens  = int(cfg.train_size) * int(cfg.out_dim)
     approx_epochs  = float(cfg.steps) * float(cfg.batch_size) / float(cfg.train_size)
 
-    print("========== Budget (MLP / teacher-student regression) ==========")
+    print("========== Budget (MLP / compositional teacher-student regression) ==========")
     print(f"target_params N     = {cfg.target_params:,}")
     print(f"in_dim / out_dim    = {cfg.in_dim} / {cfg.out_dim}")
     print(f"AGOP (input-space)  = J^T J ∈ R^{{{cfg.in_dim}×{cfg.in_dim}}} "
           f"({cfg.in_dim*(cfg.in_dim-1)//2} unique off-diag entries)")
-    print(f"teacher_hidden      = {cfg.teacher_hidden}  (4-layer teacher)")
-    print(f"train_size          = {cfg.train_size:,}  samples")
+    print(f"teacher_hidden      = {cfg.teacher_hidden}  (4-layer teacher on shared-latent inputs)")
+    print(f"train_size          = {cfg.train_size:,}  synthetic samples")
     print(f"tokens_per_step     = batch×out_dim = {cfg.batch_size}×{cfg.out_dim} = {tokens_per_step:,}")
     print(f"base steps          = {cfg.steps:,}")
     print(f"approx epochs       = {approx_epochs:.1f}")

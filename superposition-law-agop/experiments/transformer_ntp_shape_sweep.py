@@ -60,6 +60,7 @@ Usage
 from __future__ import annotations
 
 import os
+import glob
 import csv
 import math
 import time
@@ -1248,6 +1249,35 @@ def load_results_csv(csv_path: str) -> List[Dict]:
     return sorted(by_key.values(), key=lambda x: (x["target_n"], x["depth"]))
 
 
+def load_results_csvs_from_dir(out_dir: str) -> List[Dict]:
+    """
+    Load and merge all result CSVs matching results_ntp_shape_sweep*.csv under out_dir.
+    This supports appending new parameter budgets in sidecar files such as
+    results_ntp_shape_sweep（5M）.csv without manually editing the base CSV.
+
+    Duplicate (target_n, depth) rows are deduplicated globally with the last file
+    in lexical order winning.
+    """
+    pattern = os.path.join(out_dir, "results_ntp_shape_sweep*.csv")
+    csv_paths = sorted(
+        p for p in glob.glob(pattern)
+        if os.path.basename(p) != "optimal_frontier_summary.csv"
+    )
+    if not csv_paths:
+        raise FileNotFoundError(f"No result CSVs found under {out_dir} matching {pattern}")
+
+    merged: Dict[Tuple[int, int], Dict] = {}
+    for csv_path in csv_paths:
+        rows = load_results_csv(csv_path)
+        for r in rows:
+            key = (int(r["target_n"]), int(r["depth"]))
+            merged[key] = r
+    print(f"[plot_only] Loaded {len(csv_paths)} CSV file(s):")
+    for p in csv_paths:
+        print(f"  - {p}")
+    return sorted(merged.values(), key=lambda x: (x["target_n"], x["depth"]))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="NTP shape sweep: next-token prediction on WikiText-103 (byte-level).",
@@ -1300,14 +1330,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.plot_only:
-        csv_path = os.path.join(args.out_dir, "results_ntp_shape_sweep.csv")
-        if not os.path.isfile(csv_path):
-            raise FileNotFoundError(
-                f"{csv_path} not found. Run training first or set --out_dir correctly."
-            )
-        all_results = load_results_csv(csv_path)
+        all_results = load_results_csvs_from_dir(args.out_dir)
         param_groups = sorted({int(r["target_n"]) for r in all_results})
-        print(f"[plot_only] Loaded {len(all_results)} rows from {csv_path}")
+        print(f"[plot_only] Loaded {len(all_results)} merged rows")
         print(f"[plot_only] N values: {param_groups}\n")
         for n in param_groups:
             rows = sorted(
@@ -1318,7 +1343,7 @@ def main() -> None:
         plot_multi_n_summary(all_results, param_groups, args.out_dir)
         print_summary_table(all_results, param_groups)
         print(f"\n[plot_only] Plots and table regenerated under: {args.out_dir}")
-        print(f"[plot_only] CSV unchanged: {csv_path}")
+        print(f"[plot_only] Source CSVs left unchanged under: {args.out_dir}")
         return
 
     # Build config from args

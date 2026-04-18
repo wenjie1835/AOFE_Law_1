@@ -76,6 +76,8 @@ if os.environ.get("DISPLAY", "") == "":
     matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from experiments.compositional_generators import generate_compositional_sequences
+
 
 # ---------------------
 # Constants
@@ -225,8 +227,8 @@ def make_dataset(
     y_scale: Optional[float] = None,
 ) -> Tuple[torch.utils.data.TensorDataset, float]:
     """
-    Generate n random N(0,1) scalar sequences [n, SEQ_LEN, 1] and
-    pre-compute the frozen teacher's outputs [n, TEACHER_OUT].
+    Generate compositional scalar sequences [n, SEQ_LEN, 1] with repeated motifs
+    and pre-compute the frozen teacher's outputs [n, TEACHER_OUT].
 
     Outputs are NORMALISED to unit std (scalar normalisation over all
     elements of the training set) so the baseline MSE ≈ 1.0 regardless
@@ -235,9 +237,16 @@ def make_dataset(
 
     Returns: (TensorDataset, y_scale)
     """
-    rng  = np.random.default_rng(int(seed))
-    x_np = rng.standard_normal((n, SEQ_LEN, INP_DIM)).astype(np.float32)
-    x_t  = torch.from_numpy(x_np)
+    x_t = generate_compositional_sequences(
+        size=n,
+        seq_len=SEQ_LEN,
+        structure_seed=12345,
+        sample_seed=int(seed),
+        segment_len=10,
+        latent_dim=8,
+        motif_count=4,
+        dtype=torch.float32,
+    )
     y_t  = precompute_teacher_outputs(teacher, x_t, device, batch_size=512)
     if y_scale is None:
         y_scale = float(y_t.std().item())
@@ -698,12 +707,12 @@ def main():
     print(f"target_params N     = {cfg.target_params:,}")
     print(f"Teacher: 2-layer GRU, hidden={TEACHER_OUT} (frozen)")
     print(f"TEACHER_OUT         = {TEACHER_OUT}  (regression target dimension)")
-    print(f"seq_len             = {SEQ_LEN}  (random N(0,1) scalar steps)")
+    print(f"seq_len             = {SEQ_LEN}  (compositional scalar steps with repeated motifs)")
     print(f"inp_dim             = {INP_DIM}  (1D scalar per step)")
     print(f"AGOP output dim     = {TEACHER_OUT}×{TEACHER_OUT}  "
           f"({TEACHER_OUT*(TEACHER_OUT-1)//2} unique off-diag entries)")
     print(f"proj_samples        = {cfg.agop_proj_samples}")
-    print(f"train_size          = {cfg.train_size:,}  unique random sequences")
+    print(f"train_size          = {cfg.train_size:,}  unique synthetic sequences")
     print(f"approx epochs       = {approx_epochs:.2f}")
     print(f"base steps          = {cfg.steps:,}")
     print(f"D (total tokens)    = {total_train_tokens:,}   D/N = {total_train_tokens/cfg.target_params:.1f}×")

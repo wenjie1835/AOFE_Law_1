@@ -86,6 +86,8 @@ if os.environ.get("DISPLAY", "") == "":
     matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from experiments.compositional_generators import CompositionalSceneDataset, SceneConfig
+
 
 # -----------------------
 # Reproducibility helpers
@@ -482,45 +484,39 @@ def make_cifar10_loaders(
     seed: int,
     num_workers: int = 2,
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
-    # augment=True for training to prevent overfitting at ~31 epochs
-    train_set = CIFAR10Dataset(root=data_dir, train=True, augment=True)
-    test_set  = CIFAR10Dataset(root=data_dir, train=False, augment=False)
+    del data_dir  # Synthetic scenes are generated procedurally; no on-disk dataset needed.
 
-    g = torch.Generator()
-    g.manual_seed(seed)
-    perm = torch.randperm(len(train_set), generator=g).tolist()
-    total_needed = int(train_size) + int(val_size)
-    if total_needed >= len(train_set):
-        raise ValueError(f"train_size + val_size must be < {len(train_set)} for CIFAR-100.")
-    train_idx = perm[:int(train_size)]
-    val_idx = perm[int(train_size):total_needed]
-    train_subset = torch.utils.data.Subset(train_set, train_idx)
-    val_base = CIFAR10Dataset(root=data_dir, train=True, augment=False)
-    val_subset = torch.utils.data.Subset(val_base, val_idx)
+    scene_cfg = SceneConfig(image_size=32, patch=8, motif_count=6, layout_count=6)
+    train_set = CompositionalSceneDataset(
+        size=int(train_size),
+        structure_seed=int(seed) + 1000,
+        sample_seed=int(seed) + 2000,
+        cfg=scene_cfg,
+    )
+    val_set = CompositionalSceneDataset(
+        size=int(val_size),
+        structure_seed=int(seed) + 1000,
+        sample_seed=int(seed) + 3000,
+        cfg=scene_cfg,
+    )
+    test_set = CompositionalSceneDataset(
+        size=5000,
+        structure_seed=int(seed) + 1000,
+        sample_seed=int(seed) + 4000,
+        cfg=scene_cfg,
+    )
 
     train_loader = torch.utils.data.DataLoader(
-        train_subset,
-        batch_size=batch_size,
-        shuffle=True,
-        drop_last=True,
-        num_workers=num_workers,
-        pin_memory=True,
+        train_set, batch_size=batch_size, shuffle=True, drop_last=True,
+        num_workers=num_workers, pin_memory=True,
     )
     test_loader = torch.utils.data.DataLoader(
-        test_set,
-        batch_size=batch_size,
-        shuffle=False,
-        drop_last=False,
-        num_workers=num_workers,
-        pin_memory=True,
+        test_set, batch_size=batch_size, shuffle=False, drop_last=False,
+        num_workers=num_workers, pin_memory=True,
     )
     val_loader = torch.utils.data.DataLoader(
-        val_subset,
-        batch_size=batch_size,
-        shuffle=False,
-        drop_last=False,
-        num_workers=num_workers,
-        pin_memory=True,
+        val_set, batch_size=batch_size, shuffle=False, drop_last=False,
+        num_workers=num_workers, pin_memory=True,
     )
     return train_loader, val_loader, test_loader
 
@@ -860,17 +856,17 @@ def main():
     unique_patch_tokens = args.train_size * (grid * grid)
     approx_epochs       = args.steps * args.batch_size / args.train_size
 
-    print("========== Budget (CNN / CIFAR-100, teacher-student) ==========")
+    print("========== Budget (CNN / compositional scenes, teacher-student) ==========")
     print(f"target_params N     = {args.target_params:,}")
-    print(f"task                = teacher-student regression (128-dim output; channel bottleneck)")
+    print(f"task                = teacher-student regression on procedural scenes (128-dim output)")
     print(f"AGOP                = E[J J^T] ∈ R^{{128×128}}, 8128 off-diag entries")
     print(f"patch grid          = {grid}×{grid} = {grid*grid} patches/image")
-    print(f"train_size          = {args.train_size:,} images  (augmented)")
+    print(f"train_size          = {args.train_size:,} synthetic images")
     print(f"base steps          = {args.steps:,}")
     print(f"approx epochs       = {approx_epochs:.1f}")
     print(f"total patch-tokens  = {total_patch_tokens:,}  D/N = {total_patch_tokens/args.target_params:.1f}×")
     print(f"unique patch-tokens = {unique_patch_tokens:,}  {unique_patch_tokens/args.target_params:.2f}×N")
-    print(f"(augmented training prevents overfitting across {approx_epochs:.1f} epochs)")
+    print("(images are generated from repeated patch motifs and shared layout latents)")
     print("=" * 47)
 
     cfg = TrainCfg(
@@ -901,7 +897,7 @@ def main():
     # Build fixed teacher CNN (frozen random weights)
     teacher = TeacherCNN(patch=cfg.patch, seed=cfg.seed).to(device)
     print(f"Teacher CNN: channels={TeacherCNN.TEACHER_CHANNELS}, depth={TeacherCNN.TEACHER_DEPTH}, "
-          f"output={TeacherCNN.TEACHER_OUTPUT}  [FROZEN, Kaiming init]")
+          f"output={TeacherCNN.TEACHER_OUTPUT}  [FROZEN, compositional scene teacher]")
 
     train_loader, val_loader, test_loader = make_cifar10_loaders(
         data_dir=args.data_dir,
